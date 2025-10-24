@@ -222,7 +222,7 @@ const TopMenuBar: React.FC = () => {
 
     const accentHoverStyle = {
         '--hover-color': theme.accentColor
-    };
+    } as React.CSSProperties;
     
     const handleNotificationToggle = () => {
         if (!isNotificationPanelOpen) {
@@ -340,6 +340,66 @@ const TopMenuBar: React.FC = () => {
     )
 };
 
+const TaskbarPreview: React.FC<{
+    appId: AppId,
+    taskbarIconRef: React.RefObject<HTMLDivElement>,
+    onMouseEnter: () => void,
+    onMouseLeave: () => void,
+}> = ({ appId, taskbarIconRef, onMouseEnter, onMouseLeave }) => {
+    const { windows, getAppDefinition, closeApp, focusApp } = useContext(AppContext)!;
+    const appDef = getAppDefinition(appId);
+    const runningWindows = useMemo(() => windows.filter(w => w.appId === appId && !w.isMinimized), [windows, appId]);
+    const previewContainerRef = useRef<HTMLDivElement>(null);
+    const [position, setPosition] = useState({ left: 0, bottom: 0 });
+
+    useEffect(() => {
+        if (taskbarIconRef.current && previewContainerRef.current) {
+            const iconRect = taskbarIconRef.current.getBoundingClientRect();
+            const bottom = window.innerHeight - iconRect.top;
+            const left = iconRect.left + iconRect.width / 2;
+            setPosition({ left, bottom });
+        }
+    }, [taskbarIconRef, runningWindows.length]);
+
+    if (!appDef || runningWindows.length === 0) {
+        return null;
+    }
+
+    return (
+        <div
+            ref={previewContainerRef}
+            style={{ left: `${position.left}px`, bottom: `${position.bottom}px`, transform: 'translateX(-50%)' }}
+            className="absolute z-[99999] flex flex-col-reverse items-center gap-2"
+            onMouseEnter={onMouseEnter}
+            onMouseLeave={onMouseLeave}
+        >
+            {runningWindows.map(win => (
+                <div
+                    key={win.id}
+                    onClick={() => focusApp(win.id)}
+                    className="w-48 bg-[var(--bg-secondary)] backdrop-blur-xl rounded-lg shadow-lg border border-[var(--border-color)] p-2 cursor-pointer hover:border-[var(--accent-color)] transition-all animate-preview-in"
+                >
+                    <div className="flex justify-between items-start gap-2">
+                        <div className="flex items-start gap-2 overflow-hidden">
+                            <appDef.icon className="w-5 h-5 flex-shrink-0 mt-0.5" />
+                            <span className="text-xs text-[var(--text-primary)] truncate">{win.title}</span>
+                        </div>
+                        <button
+                            onClick={(e) => { e.stopPropagation(); closeApp(win.id); }}
+                            className="p-0.5 rounded-full hover:bg-[var(--bg-tertiary)] flex-shrink-0"
+                        >
+                            <svg className="w-3 h-3 text-[var(--text-secondary)]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M6 18L18 6M6 6l12 12" /></svg>
+                        </button>
+                    </div>
+                    <div className="mt-2 h-24 bg-[var(--bg-primary)] rounded-md flex items-center justify-center overflow-hidden">
+                       <appDef.icon className="w-10 h-10 text-[var(--text-secondary)] opacity-50" />
+                    </div>
+                </div>
+            ))}
+        </div>
+    );
+};
+
 const Taskbar: React.FC = () => {
     const { 
         openApp, 
@@ -354,7 +414,48 @@ const Taskbar: React.FC = () => {
         setDockedApps 
     } = useContext(AppContext)!;
     const [input, setInput] = useState('');
-    const [dockContextMenu, setDockContextMenu] = useState<{ x: number, y: number, appId: AppId } | null>(null);
+    const [taskbarContextMenu, setTaskbarContextMenu] = useState<{ x: number, y: number, appId: AppId } | null>(null);
+    const [hoveredApp, setHoveredApp] = useState<{ appId: AppId, ref: React.RefObject<HTMLDivElement> } | null>(null);
+    const hoverTimeoutRef = useRef<number | null>(null);
+    const iconRefs = useRef<Map<AppId, React.RefObject<HTMLDivElement>>>(new Map());
+
+    const taskbarApps = useMemo(() => {
+        const runningAppIds = windows.map(w => w.appId);
+        const dockedSet = new Set(dockedApps);
+        const runningButNotDocked = runningAppIds.filter(id => !dockedSet.has(id));
+        const finalIds = [...dockedApps, ...runningButNotDocked];
+        return [...new Set(finalIds)]
+            .map(id => getAppDefinition(id))
+            .filter((app): app is AppDefinition => !!app);
+    }, [dockedApps, windows, getAppDefinition]);
+
+    const getRef = (appId: AppId) => {
+        if (!iconRefs.current.has(appId)) {
+            iconRefs.current.set(appId, React.createRef<HTMLDivElement>());
+        }
+        return iconRefs.current.get(appId)!;
+    };
+    
+    const showPreview = useCallback((appId: AppId, ref: React.RefObject<HTMLDivElement>) => {
+        if (hoverTimeoutRef.current) clearTimeout(hoverTimeoutRef.current);
+        hoverTimeoutRef.current = window.setTimeout(() => {
+            const runningWindows = windows.filter(w => w.appId === appId && !w.isMinimized);
+            if (runningWindows.length > 0) {
+                 setHoveredApp({ appId, ref });
+            }
+        }, 300);
+    }, [windows]);
+
+    const hidePreview = useCallback(() => {
+        if (hoverTimeoutRef.current) clearTimeout(hoverTimeoutRef.current);
+        hoverTimeoutRef.current = window.setTimeout(() => {
+            setHoveredApp(null);
+        }, 200);
+    }, []);
+
+    const cancelHidePreview = useCallback(() => {
+        if (hoverTimeoutRef.current) clearTimeout(hoverTimeoutRef.current);
+    }, []);
 
     const handleSubmit = () => {
         if (!input.trim()) return;
@@ -375,51 +476,53 @@ const Taskbar: React.FC = () => {
     const handleIconContextMenu = (e: React.MouseEvent, appId: AppId) => {
         e.preventDefault();
         e.stopPropagation();
-        setDockContextMenu({ x: e.clientX, y: e.clientY, appId });
+        setTaskbarContextMenu({ x: e.clientX, y: e.clientY, appId });
     };
 
-    const dockContextItems = useMemo(() => {
-        if (!dockContextMenu) return [];
-        return [
-            { label: 'Open', action: () => { openApp(dockContextMenu.appId); setDockContextMenu(null); } },
-            { 
-                label: 'Unpin from Taskbar', 
-                action: () => {
-                    setDockedApps(prev => prev.filter(id => id !== dockContextMenu.appId));
-                    setDockContextMenu(null);
-                }
-            }
-        ];
-    }, [dockContextMenu, openApp, setDockedApps]);
-
+    const taskbarContextItems = useMemo(() => {
+        if (!taskbarContextMenu) return [];
+        const { appId } = taskbarContextMenu;
+        const isDocked = dockedApps.includes(appId);
+        const items = [{ label: 'Open', action: () => { openApp(appId); setTaskbarContextMenu(null); } }];
+        if (isDocked) {
+            items.push({ label: 'Unpin from Taskbar', action: () => { setDockedApps(prev => prev.filter(id => id !== appId)); setTaskbarContextMenu(null); } });
+        } else {
+            items.push({ label: 'Pin to Taskbar', action: () => { setDockedApps(prev => [...prev, appId]); setTaskbarContextMenu(null); } });
+        }
+        return items;
+    }, [taskbarContextMenu, openApp, setDockedApps, dockedApps]);
 
     return (
         <>
             <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-[100000]">
                 <div 
                     className="flex items-center bg-black/25 backdrop-blur-2xl p-2 rounded-full border border-white/20 shadow-2xl shadow-black/50 transition-all duration-300 ease-in-out focus-within:shadow-lg focus-within:shadow-blue-500/50 focus-within:border-white/30"
-                    onClick={() => setDockContextMenu(null)}
+                    onClick={() => setTaskbarContextMenu(null)}
+                    onMouseLeave={hidePreview}
                 >
-                    {dockedApps.map(appId => {
-                        const appDef = getAppDefinition(appId);
-                        if (!appDef) return null;
-                        
-                        const isRunning = windows.some(w => w.appId === appId);
+                    {taskbarApps.map(appDef => {
+                        const isRunning = windows.some(w => w.appId === appDef.id);
+                        const iconRef = getRef(appDef.id);
                         
                         const handleIconClick = () => {
-                            const runningWindows = windows.filter(w => w.appId === appId);
+                            const runningWindows = windows.filter(w => w.appId === appDef.id);
                             if (runningWindows.length > 0) {
                                 focusApp(runningWindows[0].id);
                             } else {
-                                openApp(appId);
+                                openApp(appDef.id);
                             }
                         };
 
                         return (
-                            <div key={appId} className="relative group px-1">
+                            <div 
+                                key={appDef.id} 
+                                ref={iconRef}
+                                onMouseEnter={() => showPreview(appDef.id, iconRef)}
+                                className="relative group px-1"
+                            >
                                 <button 
                                     onClick={handleIconClick} 
-                                    onContextMenu={(e) => handleIconContextMenu(e, appId)}
+                                    onContextMenu={(e) => handleIconContextMenu(e, appDef.id)}
                                     title={appDef.name} 
                                     className="p-2 rounded-full hover:bg-white/20 transition-all transform group-hover:scale-110"
                                 >
@@ -430,7 +533,7 @@ const Taskbar: React.FC = () => {
                         )
                     })}
                     
-                    {dockedApps.length > 0 && <div className="w-px h-10 bg-white/20 mx-2" />}
+                    {taskbarApps.length > 0 && <div className="w-px h-10 bg-white/20 mx-2" />}
                     
                     <button
                         onClick={handleVoiceClick}
@@ -460,7 +563,15 @@ const Taskbar: React.FC = () => {
                     </button>
                 </div>
             </div>
-            {dockContextMenu && <ContextMenu x={dockContextMenu.x} y={dockContextMenu.y} items={dockContextItems} onClose={() => setDockContextMenu(null)} />}
+            {hoveredApp && (
+                <TaskbarPreview
+                    appId={hoveredApp.appId}
+                    taskbarIconRef={hoveredApp.ref}
+                    onMouseEnter={cancelHidePreview}
+                    onMouseLeave={hidePreview}
+                />
+            )}
+            {taskbarContextMenu && <ContextMenu x={taskbarContextMenu.x} y={taskbarContextMenu.y} items={taskbarContextItems} onClose={() => setTaskbarContextMenu(null)} />}
         </>
     );
 };
@@ -514,6 +625,11 @@ const NotificationToasts: React.FC = () => {
                     to { opacity: 1; transform: translateX(0); }
                 }
                 .animate-toast-in { animation: toast-in 0.3s ease-out forwards; }
+                @keyframes preview-in {
+                    from { opacity: 0; transform: translateY(10px) scale(0.95); }
+                    to { opacity: 1; transform: translateY(0) scale(1); }
+                }
+                .animate-preview-in { animation: preview-in 0.2s ease-out forwards; }
             `}</style>
         </div>
     );

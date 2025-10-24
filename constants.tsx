@@ -1,3 +1,4 @@
+
 import React from 'react';
 import { AppDefinition, FileSystemNode } from './types';
 import { AIAssistant, FileExplorer, Terminal, Settings, TextEditor, Calculator, Browser, Notes, MediaViewer, PropertiesViewer } from './components/Applications';
@@ -31,7 +32,10 @@ export const NoteIcon = ({ className }: { className?: string }) => (
     <svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}><path d="M8 5C8 4.44772 8.44772 4 9 4H39C39.5523 4 40 4.44772 40 5V43C40 43.5523 39.5523 44 39 44H9C8.44772 44 8 43.5523 8 43V5Z" fill="#FBBF24"></path><path d="M8 10H40" stroke="#F87171" strokeWidth="4"></path></svg>
 );
 export const ImageIcon = ({ className }: { className?: string }) => (
-    <svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}><rect x="4" y="4" width="40" height="40" rx="8" fill="#E5E7EB"></rect><path d="M4 32L14 22C15.5556 20.4444 18.4444 20.4444 20 22L28 30L32 26C33.5556 24.4444 36.4444 24.4444 38 26L44 32V38C44 39.1046 43.1046 40 42 40H6C4.89543 40 4 39.1046 4 38V32Z" fill="#34D399" g><circle cx="32" cy="16" r="4" fill="#FBBF24"></circle></svg>
+    <svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}><rect x="4" y="4" width="40" height="40" rx="8" fill="#E5E7EB"></rect><path d="M4 32L14 22C15.5556 20.4444 18.4444 20.4444 20 22L28 30L32 26C33.5556 24.4444 36.4444 24.4444 38 26L44 32V38C44 39.1046 43.1046 40 42 40H6C4.89543 40 4 39.1046 4 38V32Z" fill="#34D399"></path><circle cx="32" cy="16" r="4" fill="#FBBF24"></circle></svg>
+);
+export const ZipIcon = ({ className }: { className?: string, style?: React.CSSProperties }) => (
+    <svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}><path d="M10 4H30L40 14V42C40 43.1046 39.1046 44 38 44H10C8.89543 44 8 43.1046 8 42V6C8 4.89543 8.89543 4 10 4Z" fill="#A5B4FC"></path><path d="M30 4L40 14H32C30.8954 14 30 13.1046 30 12V4Z" fill="#6366F1"></path><rect x="14" y="20" width="20" height="4" fill="#4338CA"></rect><rect x="14" y="28" width="20" height="4" fill="#E0E7FF"></rect><rect x="14" y="36" width="20" height="4" fill="#4338CA"></rect><path d="M22 24H26V28H22V24Z" fill="#E0E7FF"></path></svg>
 );
 // FIX: Updated StartIcon to accept a `style` prop to allow dynamic stroke color. Removed hardcoded stroke colors from paths to allow inheritance. Added a default stroke color to the parent SVG.
 export const StartIcon = ({ className, style }: { className?: string; style?: React.CSSProperties }) => (

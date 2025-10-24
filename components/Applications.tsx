@@ -1,10 +1,13 @@
+
 import React, { useState, useEffect, useRef, useContext, useCallback, useMemo } from 'react';
 import { AppContext } from '../App';
 import { FileSystemNode, ConversationMode, Message, Transcription, AppId, FileSystemAction, AppDefinition, Theme } from '../types';
-import { initialFileSystem, FileTextIcon, FolderIcon, NewFolderIcon, APP_DEFINITIONS, ImageIcon, ComputerIcon, AppsIcon, PaintBrushIcon, SpeakerIcon, TrashIcon, GridViewIcon, ListViewIcon } from '../constants';
+import { initialFileSystem, FileTextIcon, FolderIcon, NewFolderIcon, APP_DEFINITIONS, ImageIcon, ComputerIcon, AppsIcon, PaintBrushIcon, SpeakerIcon, TrashIcon, GridViewIcon, ListViewIcon, ZipIcon } from '../constants';
 import geminiService from '../services/geminiService';
 import { decode, decodeAudioData, encode } from '../utils/audioUtils';
 // FIX: Removed unused and non-existent 'LiveSession' type from import.
+
+declare var JSZip: any;
 
 // --- App Renderer ---
 export const AppRenderer: React.FC<{ appId: AppId, args?: any }> = ({ appId, args }) => {
@@ -355,9 +358,10 @@ export const ContextMenu: React.FC<{ x: number, y: number, items: { label: strin
         return () => document.removeEventListener('mousedown', handleClickOutside);
     }, [onClose]);
     
-    const accentHoverStyle: React.CSSProperties = {
+    // FIX: Cast style object with custom property to React.CSSProperties to satisfy TypeScript.
+    const accentHoverStyle = {
         '--hover-bg': theme.accentColor
-    };
+    } as React.CSSProperties;
 
     return (
         <div ref={menuRef} style={{ top: y, left: x, backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-color)' }} className="absolute z-50 border rounded-md shadow-lg text-[var(--text-primary)] text-sm">
@@ -417,6 +421,95 @@ export const FileExplorer: React.FC = () => {
     }, [fileSystem]);
 
 
+    const handleDecompress = async (zipNode: FileSystemNode) => {
+        if (!zipNode.content || (zipNode.mimeType !== 'application/zip' && !zipNode.name.endsWith('.zip'))) return;
+
+        sendNotification({ appId: 'file_explorer', title: 'Decompressing...', message: `Extracting "${zipNode.name}".` });
+
+        try {
+            const zip = await JSZip.loadAsync(zipNode.content, { base64: true });
+            
+            const parentNode = getCurrentNode();
+            const extractionFolderName = zipNode.name.replace(/\.zip$/, '');
+
+            const extractionFolderNode: FileSystemNode = {
+                id: `folder-${Date.now()}-${Math.random()}`,
+                name: extractionFolderName,
+                type: 'folder',
+                children: [],
+                createdAt: new Date().toISOString(),
+            };
+            fsDispatch({ type: 'ADD_NODE', payload: { parentId: parentNode.id, node: extractionFolderNode } });
+
+            const createdDirs = new Map<string, string>();
+            createdDirs.set('', extractionFolderNode.id);
+
+            // FIX: Cast the result of Object.values to any[] to resolve typing issues with JSZip library.
+            const fileEntries = (Object.values(zip.files) as any[]).filter(file => !file.dir);
+            
+            for (const zipEntry of fileEntries) {
+                const pathParts = zipEntry.name.split('/').filter(p => p);
+                const fileName = pathParts.pop();
+                if (!fileName) continue;
+
+                let currentParentId = extractionFolderNode.id;
+                let builtPath = '';
+                for (const part of pathParts) {
+                    const parentPath = builtPath;
+                    builtPath = builtPath ? `${builtPath}/${part}` : part;
+                    if (!createdDirs.has(builtPath)) {
+                        const newFolderNode: FileSystemNode = {
+                            id: `folder-${Date.now()}-${Math.random()}`,
+                            name: part,
+                            type: 'folder',
+                            children: [],
+                            createdAt: new Date().toISOString(),
+                        };
+                        const parentIdForDispatch = createdDirs.get(parentPath)!;
+                        fsDispatch({ type: 'ADD_NODE', payload: { parentId: parentIdForDispatch, node: newFolderNode } });
+                        createdDirs.set(builtPath, newFolderNode.id);
+                    }
+                    currentParentId = createdDirs.get(builtPath)!;
+                }
+                
+                let content: string;
+                let size: number;
+                let mimeType: string = 'application/octet-stream';
+
+                if (/\.(txt|md|json|html|css|js)$/i.test(fileName)) {
+                    content = await zipEntry.async("string");
+                    size = new Blob([content]).size;
+                    if(fileName.endsWith('.txt')) mimeType = 'text/plain';
+                    if(fileName.endsWith('.md')) mimeType = 'text/markdown';
+                } else if (/\.(jpe?g|png|gif|webp)$/i.test(fileName)) {
+                    const base64Content = await zipEntry.async("base64");
+                    mimeType = `image/${fileName.split('.').pop()?.toLowerCase() || 'jpeg'}`;
+                    content = `data:${mimeType};base64,${base64Content}`;
+                    size = atob(base64Content).length;
+                } else {
+                    content = await zipEntry.async("base64");
+                    size = atob(content).length;
+                }
+                
+                const newFileNode: FileSystemNode = {
+                    id: `file-${Date.now()}-${Math.random()}`,
+                    name: fileName,
+                    type: 'file',
+                    content,
+                    createdAt: new Date().toISOString(),
+                    size,
+                    mimeType
+                };
+                fsDispatch({ type: 'ADD_NODE', payload: { parentId: currentParentId, node: newFileNode } });
+            }
+            sendNotification({ appId: 'file_explorer', title: 'Decompression Complete', message: `Successfully extracted "${zipNode.name}".` });
+        } catch(error) {
+             console.error("Decompression failed:", error);
+             sendNotification({ appId: 'file_explorer', title: 'Decompression Failed', message: `Could not extract "${zipNode.name}". The file may be corrupt.` });
+        }
+    };
+
+
     const handleNodeClick = (node: FileSystemNode) => {
         if (node.type === 'folder') {
             setSearchResults(null);
@@ -429,7 +522,9 @@ export const FileExplorer: React.FC = () => {
                  setCurrentPath([...currentPath, node.name]);
             }
         } else {
-             if (node.mimeType?.startsWith('image/')) {
+             if (node.mimeType === 'application/zip' || node.name.endsWith('.zip')) {
+                 handleDecompress(node);
+             } else if (node.mimeType?.startsWith('image/')) {
                  openApp('media_viewer', { file: node });
              } else {
                  openApp('text_editor', { file: node });
@@ -589,6 +684,57 @@ export const FileExplorer: React.FC = () => {
             message: `'${newNode.name}' was successfully copied.`,
         });
     }, [clipboard, fsDispatch, getCurrentNode, sendNotification]);
+    
+    const handleCompress = async (nodeToCompress: FileSystemNode) => {
+        sendNotification({ appId: 'file_explorer', title: 'Compressing...', message: `Starting to compress "${nodeToCompress.name}".` });
+        const zip = new JSZip();
+
+        const addNodeToZip = async (currentZipFolder: any, node: FileSystemNode) => {
+            if (node.type === 'file') {
+                let fileContent: any = node.content || '';
+                if (node.mimeType?.startsWith('image/') && node.content) {
+                    try {
+                        const response = await fetch(node.content);
+                        fileContent = await response.blob();
+                    } catch (error) {
+                        console.error(`Failed to fetch image ${node.name}:`, error);
+                        fileContent = `Error: Could not fetch image content from ${node.content}`;
+                    }
+                }
+                currentZipFolder.file(node.name, fileContent);
+            } else if (node.type === 'folder' && node.children) {
+                const folder = currentZipFolder.folder(node.name);
+                for (const child of node.children) {
+                    await addNodeToZip(folder, child);
+                }
+            }
+        };
+
+        try {
+            await addNodeToZip(zip, nodeToCompress);
+            const zipContent = await zip.generateAsync({ type: 'base64' });
+
+            const parentNode = getCurrentNode();
+            const zipFileName = `${nodeToCompress.name.split('.')[0]}.zip`;
+            
+            const newNode: FileSystemNode = {
+                id: `file-${Date.now()}-${Math.random()}`,
+                name: zipFileName,
+                type: 'file',
+                content: zipContent,
+                createdAt: new Date().toISOString(),
+                size: atob(zipContent).length,
+                mimeType: 'application/zip',
+            };
+
+            fsDispatch({ type: 'ADD_NODE', payload: { parentId: parentNode.id, node: newNode } });
+            sendNotification({ appId: 'file_explorer', title: 'Compression Complete', message: `Successfully created "${zipFileName}".` });
+        } catch (error) {
+            console.error("Compression failed:", error);
+            sendNotification({ appId: 'file_explorer', title: 'Compression Failed', message: `Could not compress "${nodeToCompress.name}".` });
+        }
+    };
+
 
     const handleContextMenu = (e: React.MouseEvent, node: FileSystemNode) => {
         e.preventDefault();
@@ -640,13 +786,26 @@ export const FileExplorer: React.FC = () => {
                     { label: 'Delete Permanently', action: () => handleDeletePermanently(contextMenu.node!) },
                 ];
             }
-            return [
+            
+            const isZip = contextMenu.node.name.endsWith('.zip') || contextMenu.node.mimeType === 'application/zip';
+            
+            const items = [
                 { label: 'Open', action: () => handleNodeClick(contextMenu.node!) },
+            ];
+
+            if (isZip) {
+                items.push({ label: 'Decompress', action: () => handleDecompress(contextMenu.node!) });
+            } else {
+                items.push({ label: 'Compress', action: () => handleCompress(contextMenu.node!) });
+            }
+
+            items.push(
                 { label: 'Copy', action: () => handleCopy(contextMenu.node!) },
                 { label: 'Rename', action: () => setRenamingId(contextMenu.node!.id) },
                 { label: 'Delete', action: () => handleMoveToTrash(contextMenu.node!) },
-                { label: 'Properties', action: () => openApp('properties_viewer', { file: contextMenu.node! }) },
-            ];
+                { label: 'Properties', action: () => openApp('properties_viewer', { file: contextMenu.node! }) }
+            );
+            return items;
         } else {
             if (isTrashFolder) {
                 const trashNode = fileSystem.children?.find(c => c.id === 'trash');
@@ -661,9 +820,10 @@ export const FileExplorer: React.FC = () => {
         }
     }, [contextMenu, clipboard, handlePaste, isTrashFolder, fileSystem]);
     
+    // FIX: Cast style object with custom property to React.CSSProperties to satisfy TypeScript.
     const accentHoverStyle = {
       '--hover-bg-color': `${theme.accentColor}33` // Add alpha for hover
-    };
+    } as React.CSSProperties;
 
     const filteredResults = useMemo(() => {
         if (!searchResults) return [];
@@ -850,6 +1010,7 @@ export const FileExplorer: React.FC = () => {
                     <ul className="p-2 space-y-px">
                         {sortedNodes.map((node) => {
                             const isSelected = selectedNodeId === node.id;
+                            const isZip = node.name.endsWith('.zip') || node.mimeType === 'application/zip';
                             return (
                             <li key={node.id} onDoubleClick={() => handleNodeClick(node)} onContextMenu={(e) => handleContextMenu(e, node)}
                                 onClick={(e) => { e.stopPropagation(); setSelectedNodeId(node.id)}}
@@ -857,7 +1018,7 @@ export const FileExplorer: React.FC = () => {
                                 style={isSelected ? { backgroundColor: theme.accentColor } : accentHoverStyle}
                             >
                                 <div className="flex-shrink-0" style={{ filter: isSelected ? 'brightness(0) invert(1)' : 'none' }}>
-                                    {node.type === 'folder' ? <FolderIcon className="w-6 h-6" /> : <FileTextIcon className="w-6 h-6" />}
+                                    {isZip ? <ZipIcon className="w-6 h-6" /> : node.type === 'folder' ? <FolderIcon className="w-6 h-6" /> : <FileTextIcon className="w-6 h-6" />}
                                 </div>
                                 {renamingId === node.id ? (
                                     <input type="text" defaultValue={node.name} onBlur={(e) => handleRename(node, e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleRename(node, e.currentTarget.value)} className="bg-transparent p-0 m-0 border-0 outline-none w-full" autoFocus onClick={(e) => e.stopPropagation()}/>
@@ -880,6 +1041,7 @@ export const FileExplorer: React.FC = () => {
                     <ul className="grid grid-cols-[repeat(auto-fill,minmax(100px,1fr))] gap-4">
                          {sortedNodes.map((node) => {
                             const isSelected = selectedNodeId === node.id;
+                            const isZip = node.name.endsWith('.zip') || node.mimeType === 'application/zip';
                             return (
                             <li key={node.id} onDoubleClick={() => handleNodeClick(node)} onContextMenu={(e) => handleContextMenu(e, node)}
                                 onClick={(e) => { e.stopPropagation(); setSelectedNodeId(node.id)}}
@@ -889,6 +1051,8 @@ export const FileExplorer: React.FC = () => {
                                 <div className="w-16 h-16 flex items-center justify-center mb-1" style={{ filter: isSelected ? 'brightness(0) invert(1)' : 'none' }}>
                                     {node.type === 'file' && node.mimeType?.startsWith('image/') ? (
                                         <img src={node.content} alt={node.name} className="max-w-full max-h-full object-cover rounded-md" />
+                                    ) : isZip ? (
+                                        <ZipIcon className="w-16 h-16" />
                                     ) : node.type === 'folder' ? (
                                         <FolderIcon className="w-16 h-16" />
                                     ) : (
@@ -1589,6 +1753,7 @@ export const PropertiesViewer: React.FC<{ file?: FileSystemNode }> = ({ file }) 
 
     const getFileTypeDescription = (node: FileSystemNode): string => {
         if (node.type === 'folder') return 'Folder';
+        if (node.name.endsWith('.zip') || node.mimeType === 'application/zip') return 'ZIP Archive';
         if (node.mimeType) {
             if (node.mimeType.startsWith('image/')) return `Image File (${node.mimeType.split('/')[1].toUpperCase()})`;
             if (node.mimeType === 'text/plain') return 'Text Document';
