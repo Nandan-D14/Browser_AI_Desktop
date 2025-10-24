@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useContext, useCallback, useMemo } from 'react';
 import { AppContext } from '../App';
 import { FileSystemNode, ConversationMode, Message, Transcription, AppId, FileSystemAction, AppDefinition, Theme } from '../types';
-import { initialFileSystem, FileTextIcon, FolderIcon, NewFolderIcon, APP_DEFINITIONS, ImageIcon, ComputerIcon, AppsIcon, PaintBrushIcon, SpeakerIcon, TrashIcon } from '../constants';
+import { initialFileSystem, FileTextIcon, FolderIcon, NewFolderIcon, APP_DEFINITIONS, ImageIcon, ComputerIcon, AppsIcon, PaintBrushIcon, SpeakerIcon, TrashIcon, GridViewIcon, ListViewIcon } from '../constants';
 import geminiService from '../services/geminiService';
 import { decode, decodeAudioData, encode } from '../utils/audioUtils';
 // FIX: Removed unused and non-existent 'LiveSession' type from import.
@@ -379,6 +379,7 @@ export const ContextMenu: React.FC<{ x: number, y: number, items: { label: strin
 // --- File Explorer ---
 type SearchFilter = 'all' | 'folder' | 'text' | 'image';
 type SearchResult = FileSystemNode & { path: string };
+type SortKey = 'name' | 'size' | 'createdAt';
 
 export const FileExplorer: React.FC = () => {
     const { fileSystem, fsDispatch, openApp, theme, sendNotification } = useContext(AppContext)!;
@@ -390,6 +391,8 @@ export const FileExplorer: React.FC = () => {
     const [contextMenu, setContextMenu] = useState<{ x: number, y: number, node?: FileSystemNode } | null>(null);
     const [clipboard, setClipboard] = useState<FileSystemNode | null>(null);
     const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+    const [viewMode, setViewMode] = useState<'list' | 'grid'>('list');
+    const [sortConfig, setSortConfig] = useState<{ key: SortKey, direction: 'ascending' | 'descending' }>({ key: 'name', direction: 'ascending' });
 
     const getCurrentNode = useCallback(() => {
         let node = fileSystem;
@@ -418,11 +421,10 @@ export const FileExplorer: React.FC = () => {
         if (node.type === 'folder') {
             setSearchResults(null);
             setSearchQuery('');
-            // Find path to navigate to, if it's a search result
             if ((node as SearchResult).path) {
                 const pathParts = (node as SearchResult).path.replace(/^~\//, '').split('/');
-                const folderName = pathParts.pop();
-                setCurrentPath(pathParts);
+                pathParts.pop();
+                setCurrentPath([...pathParts, node.name]);
             } else {
                  setCurrentPath([...currentPath, node.name]);
             }
@@ -658,8 +660,6 @@ export const FileExplorer: React.FC = () => {
             return items;
         }
     }, [contextMenu, clipboard, handlePaste, isTrashFolder, fileSystem]);
-
-    const pathString = `~/${currentPath.join('/')}`;
     
     const accentHoverStyle = {
       '--hover-bg-color': `${theme.accentColor}33` // Add alpha for hover
@@ -685,6 +685,83 @@ export const FileExplorer: React.FC = () => {
         { id: 'image', label: 'Images' },
     ];
 
+    const sortedNodes = useMemo(() => {
+        const nodesToSort = [...(currentNode.children || [])];
+        if (sortConfig.key) {
+            nodesToSort.sort((a, b) => {
+                if (a.type === 'folder' && b.type !== 'folder') return -1;
+                if (a.type !== 'folder' && b.type === 'folder') return 1;
+    
+                let comparison = 0;
+                switch(sortConfig.key) {
+                    case 'name':
+                        comparison = a.name.localeCompare(b.name);
+                        break;
+                    case 'size':
+                        comparison = (a.size ?? -1) - (b.size ?? -1);
+                        break;
+                    case 'createdAt':
+                        comparison = new Date(a.createdAt ?? 0).getTime() - new Date(b.createdAt ?? 0).getTime();
+                        break;
+                    default:
+                        comparison = 0;
+                }
+    
+                return sortConfig.direction === 'ascending' ? comparison : -comparison;
+            });
+        }
+        return nodesToSort;
+    }, [currentNode.children, sortConfig]);
+
+    const requestSort = (key: SortKey) => {
+        let direction: 'ascending' | 'descending' = 'ascending';
+        if (sortConfig.key === key && sortConfig.direction === 'ascending') {
+            direction = 'descending';
+        }
+        setSortConfig({ key, direction });
+    };
+
+    const formatBytes = (bytes: number | undefined) => {
+        if (bytes === undefined || bytes === null || !+bytes) return '-';
+        const k = 1024;
+        const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return `${parseFloat((bytes / Math.pow(k, i)).toFixed(i === 0 ? 0 : 1))} ${sizes[i]}`;
+    }
+
+    const PathBreadcrumbs = () => {
+        const pathParts = ['~', ...currentPath];
+        return (
+            <div className="flex-grow bg-[var(--bg-primary)] rounded px-2 py-1 text-sm flex items-center space-x-1 overflow-x-auto">
+                {pathParts.map((part, index) => (
+                    <React.Fragment key={index}>
+                        <button
+                            onClick={() => {
+                                setSearchResults(null);
+                                setSearchQuery('');
+                                setCurrentPath(pathParts.slice(1, index + 1));
+                            }}
+                            className="hover:underline flex-shrink-0"
+                        >
+                            {part === '~' ? <ComputerIcon className="w-4 h-4" /> : part}
+                        </button>
+                        {index < pathParts.length - 1 && <span className="text-[var(--text-secondary)]">/</span>}
+                    </React.Fragment>
+                ))}
+            </div>
+        );
+    };
+
+    const SortableHeader: React.FC<{ sortKey: SortKey, label: string, className?: string }> = ({ sortKey, label, className }) => {
+        const isSorted = sortConfig.key === sortKey;
+        const icon = isSorted ? (sortConfig.direction === 'ascending' ? '▲' : '▼') : '';
+        return (
+            <button onClick={() => requestSort(sortKey)} className={`flex items-center gap-1 ${className}`}>
+                {label} <span className="text-xs">{icon}</span>
+            </button>
+        );
+    };
+    
     return (
         <div className="h-full flex flex-col text-[var(--text-primary)]">
             <div className="flex-shrink-0 bg-[var(--bg-secondary)] border-b border-[var(--border-color)]">
@@ -695,13 +772,17 @@ export const FileExplorer: React.FC = () => {
                     <button onClick={handleCreateFolder} className="p-1 rounded hover:bg-[var(--bg-tertiary)]" title="New Folder">
                         <NewFolderIcon className="w-5 h-5" />
                     </button>
-                    <div className="flex-grow bg-[var(--bg-primary)] rounded px-2 py-1 text-sm">{pathString}</div>
+                    <PathBreadcrumbs />
                      {isTrashFolder && (
                         <button onClick={handleEmptyTrash} className="px-3 py-1 text-sm bg-red-500 text-white rounded hover:bg-red-600 disabled:opacity-50 flex items-center gap-1.5" disabled={currentNode.children?.length === 0}>
                             <TrashIcon className="w-4 h-4" />
                             Empty Trash
                         </button>
                     )}
+                    <div className="flex items-center space-x-1">
+                        <button onClick={() => setViewMode('list')} className={`p-1 rounded ${viewMode === 'list' ? 'bg-[var(--bg-tertiary)]' : 'hover:bg-[var(--bg-tertiary)]'}`} title="List View"><ListViewIcon className="w-5 h-5" /></button>
+                        <button onClick={() => setViewMode('grid')} className={`p-1 rounded ${viewMode === 'grid' ? 'bg-[var(--bg-tertiary)]' : 'hover:bg-[var(--bg-tertiary)]'}`} title="Grid View"><GridViewIcon className="w-5 h-5" /></button>
+                    </div>
                     <input
                         type="text"
                         placeholder="Search entire filesystem..."
@@ -727,27 +808,20 @@ export const FileExplorer: React.FC = () => {
             </div>
 
             {searchResults !== null ? (
+                // SEARCH RESULTS VIEW (simplified list view)
                 <div className="flex-grow p-2 overflow-y-auto" onClick={() => setSelectedNodeId(null)}>
                     <div className="flex justify-between items-center mb-2 px-2">
-                         <p className="text-sm text-[var(--text-secondary)]">
-                            Found {filteredResults.length} result(s)
-                        </p>
-                        <button onClick={() => { setSearchQuery(''); setSearchResults(null); }} 
-                            className="text-sm px-2 py-1 rounded hover:bg-[var(--bg-tertiary)]"
-                            style={{ color: theme.accentColor }}>
-                            Clear Search
-                        </button>
+                         <p className="text-sm text-[var(--text-secondary)]">Found {filteredResults.length} result(s)</p>
+                        <button onClick={() => { setSearchQuery(''); setSearchResults(null); }} className="text-sm px-2 py-1 rounded hover:bg-[var(--bg-tertiary)]" style={{ color: theme.accentColor }}>Clear Search</button>
                     </div>
                     {filteredResults.length > 0 ? (
                         <ul className="space-y-1">
-                            {filteredResults.map((node, index) => {
+                            {filteredResults.map((node) => {
                                 const isSelected = selectedNodeId === node.id;
                                 return (
                                 <li key={node.id} onDoubleClick={() => handleNodeClick(node)} onContextMenu={(e) => handleContextMenu(e, node)} 
-                                    onClick={() => setSelectedNodeId(node.id)}
-                                    className={`flex items-center space-x-3 px-2 py-1.5 rounded cursor-pointer transition-colors duration-150 ${
-                                        isSelected ? 'text-white' : `hover:bg-[var(--hover-bg-color)] ${index % 2 !== 0 ? 'bg-black/5 dark:bg-white/5' : ''}`
-                                    }`}
+                                    onClick={(e) => {e.stopPropagation(); setSelectedNodeId(node.id)}}
+                                    className={`flex items-center space-x-3 px-2 py-1.5 rounded cursor-pointer transition-colors duration-150 ${ isSelected ? 'text-white' : `hover:bg-[var(--hover-bg-color)]` }`}
                                     style={isSelected ? { backgroundColor: theme.accentColor } : accentHoverStyle}
                                 >
                                     <div className="flex-shrink-0" style={{ filter: isSelected ? 'brightness(0) invert(1)' : 'none' }}>
@@ -761,55 +835,75 @@ export const FileExplorer: React.FC = () => {
                             )})}
                         </ul>
                     ) : (
-                        <div className="h-full flex items-center justify-center text-center text-[var(--text-secondary)]">
-                            <p>No results found for "{searchQuery}".</p>
-                        </div>
+                        <div className="h-full flex items-center justify-center text-center text-[var(--text-secondary)]"><p>No results found for "{searchQuery}".</p></div>
                     )}
                 </div>
-            ) : (
-                <div className="flex-grow p-2 overflow-y-auto" onClick={() => { setContextMenu(null); setSelectedNodeId(null); }} onContextMenu={handleBackgroundContextMenu}>
-                    <ul className="space-y-1">
-                        {currentNode.children?.map((node, index) => {
+            ) : viewMode === 'list' ? (
+                // LIST VIEW
+                <div className="flex-grow overflow-y-auto" onClick={() => { setContextMenu(null); setSelectedNodeId(null); }} onContextMenu={handleBackgroundContextMenu}>
+                    <div className="grid grid-cols-[auto_1fr_100px_150px] gap-x-4 px-2 py-1 text-xs font-semibold text-[var(--text-secondary)] border-b border-[var(--border-color)] sticky top-0 bg-[var(--window-content-bg)]">
+                        <div />
+                        <SortableHeader sortKey='name' label='Name' className='text-left' />
+                        <SortableHeader sortKey='size' label='Size' className='justify-end' />
+                        <SortableHeader sortKey='createdAt' label='Date Modified' className='justify-end' />
+                    </div>
+                    <ul className="p-2 space-y-px">
+                        {sortedNodes.map((node) => {
                             const isSelected = selectedNodeId === node.id;
                             return (
                             <li key={node.id} onDoubleClick={() => handleNodeClick(node)} onContextMenu={(e) => handleContextMenu(e, node)}
-                                onClick={() => setSelectedNodeId(node.id)}
-                                className={`flex items-center space-x-3 px-2 py-1.5 rounded cursor-pointer transition-colors duration-150 ${
-                                    isSelected ? 'text-white' : `hover:bg-[var(--hover-bg-color)] ${index % 2 !== 0 ? 'bg-black/5 dark:bg-white/5' : ''}`
-                                }`}
+                                onClick={(e) => { e.stopPropagation(); setSelectedNodeId(node.id)}}
+                                className={`grid grid-cols-[auto_1fr_100px_150px] gap-x-4 items-center px-2 py-1.5 rounded cursor-pointer transition-colors duration-150 ${ isSelected ? 'text-white' : 'hover:bg-[var(--hover-bg-color)]' }`}
                                 style={isSelected ? { backgroundColor: theme.accentColor } : accentHoverStyle}
                             >
                                 <div className="flex-shrink-0" style={{ filter: isSelected ? 'brightness(0) invert(1)' : 'none' }}>
                                     {node.type === 'folder' ? <FolderIcon className="w-6 h-6" /> : <FileTextIcon className="w-6 h-6" />}
                                 </div>
                                 {renamingId === node.id ? (
-                                    <input
-                                        type="text"
-                                        defaultValue={node.name}
-                                        onBlur={(e) => handleRename(node, e.target.value)}
-                                        onKeyDown={(e) => e.key === 'Enter' && handleRename(node, e.currentTarget.value)}
-                                        className="bg-transparent p-0 m-0 border-0 outline-none w-full"
-                                        autoFocus
-                                        onClick={(e) => e.stopPropagation()}
-                                    />
+                                    <input type="text" defaultValue={node.name} onBlur={(e) => handleRename(node, e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleRename(node, e.currentTarget.value)} className="bg-transparent p-0 m-0 border-0 outline-none w-full" autoFocus onClick={(e) => e.stopPropagation()}/>
                                 ) : (
                                     <div className='flex flex-col overflow-hidden'>
                                         <span className="truncate">{node.name}</span>
-                                         {isTrashFolder && node.originalParentId && (
-                                            <span className={`text-xs truncate ${isSelected ? 'text-white/70' : 'text-[var(--text-secondary)]'}`}>
-                                                From: {findNodeById(node.originalParentId)?.name || 'Unknown Location'}
-                                            </span>
-                                        )}
+                                         {isTrashFolder && node.originalParentId && (<span className={`text-xs truncate ${isSelected ? 'text-white/70' : 'text-[var(--text-secondary)]'}`}>From: {findNodeById(node.originalParentId)?.name || 'Unknown Location'}</span>)}
                                     </div>
+                                )}
+                                <span className="text-right text-sm text-[var(--text-secondary)]">{formatBytes(node.size)}</span>
+                                <span className="text-right text-sm text-[var(--text-secondary)]">{node.createdAt ? new Date(node.createdAt).toLocaleString() : '-'}</span>
+                            </li>
+                        )})}
+                    </ul>
+                     {currentNode.children?.length === 0 && (<div className="h-full flex items-center justify-center text-center text-[var(--text-secondary)]"><p>{isTrashFolder ? 'Trash is empty.' : 'This folder is empty.'}</p></div>)}
+                </div>
+            ) : (
+                // GRID VIEW
+                <div className="flex-grow p-4 overflow-y-auto" onClick={() => { setContextMenu(null); setSelectedNodeId(null); }} onContextMenu={handleBackgroundContextMenu}>
+                    <ul className="grid grid-cols-[repeat(auto-fill,minmax(100px,1fr))] gap-4">
+                         {sortedNodes.map((node) => {
+                            const isSelected = selectedNodeId === node.id;
+                            return (
+                            <li key={node.id} onDoubleClick={() => handleNodeClick(node)} onContextMenu={(e) => handleContextMenu(e, node)}
+                                onClick={(e) => { e.stopPropagation(); setSelectedNodeId(node.id)}}
+                                className={`flex flex-col items-center text-center w-28 h-28 p-2 rounded-lg cursor-pointer transition-colors duration-150 ${ isSelected ? 'text-white' : 'hover:bg-[var(--hover-bg-color)]' }`}
+                                style={isSelected ? { backgroundColor: theme.accentColor } : accentHoverStyle}
+                            >
+                                <div className="w-16 h-16 flex items-center justify-center mb-1" style={{ filter: isSelected ? 'brightness(0) invert(1)' : 'none' }}>
+                                    {node.type === 'file' && node.mimeType?.startsWith('image/') ? (
+                                        <img src={node.content} alt={node.name} className="max-w-full max-h-full object-cover rounded-md" />
+                                    ) : node.type === 'folder' ? (
+                                        <FolderIcon className="w-16 h-16" />
+                                    ) : (
+                                        <FileTextIcon className="w-16 h-16" />
+                                    )}
+                                </div>
+                                {renamingId === node.id ? (
+                                    <input type="text" defaultValue={node.name} onBlur={(e) => handleRename(node, e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleRename(node, e.currentTarget.value)} className="bg-transparent text-center p-0 m-0 border-0 outline-none w-full text-xs" autoFocus onClick={(e) => e.stopPropagation()} style={{color: isSelected ? 'white' : 'inherit'}} />
+                                ) : (
+                                     <span className="text-xs break-words w-full truncate">{node.name}</span>
                                 )}
                             </li>
                         )})}
-                         {currentNode.children?.length === 0 && (
-                            <div className="h-full flex items-center justify-center text-center text-[var(--text-secondary)]">
-                                <p>{isTrashFolder ? 'Trash is empty.' : 'This folder is empty.'}</p>
-                            </div>
-                        )}
                     </ul>
+                     {currentNode.children?.length === 0 && (<div className="h-full flex items-center justify-center text-center text-[var(--text-secondary)]"><p>{isTrashFolder ? 'Trash is empty.' : 'This folder is empty.'}</p></div>)}
                 </div>
             )}
             {contextMenu && <ContextMenu x={contextMenu.x} y={contextMenu.y} items={contextMenuItems} onClose={() => setContextMenu(null)} />}

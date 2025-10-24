@@ -67,6 +67,12 @@ export const TrashIcon = ({ className }: { className?: string }) => (
         <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
     </svg>
 );
+export const ListViewIcon = ({ className }: { className?: string }) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3.01" y2="6"></line><line x1="3" y1="12" x2="3.01" y2="12"></line><line x1="3" y1="18" x2="3.01" y2="18"></line></svg>
+);
+export const GridViewIcon = ({ className }: { className?: string }) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
+);
 
 
 // --- App Definitions ---
@@ -88,30 +94,30 @@ export const initialFileSystem: FileSystemNode = {
   id: 'root',
   name: '~',
   type: 'folder',
-  createdAt: new Date().toISOString(),
+  createdAt: new Date('2023-01-01T10:00:00Z').toISOString(),
   children: [
     {
       id: 'desktop',
       name: 'Desktop',
       type: 'folder',
-      createdAt: new Date().toISOString(),
+      createdAt: new Date('2023-01-01T10:01:00Z').toISOString(),
       children: [],
     },
     {
       id: 'documents',
       name: 'Documents',
       type: 'folder',
-      createdAt: new Date().toISOString(),
+      createdAt: new Date('2023-01-01T10:02:00Z').toISOString(),
       children: [
-        { id: 'doc1', name: 'project_plan.txt', type: 'file', content: 'Here is the project plan...', createdAt: new Date().toISOString(), size: 27, mimeType: 'text/plain' },
-        { id: 'notes-file', name: 'notes.txt', type: 'file', content: 'This is a persistent notepad.', createdAt: new Date().toISOString(), size: 29, mimeType: 'text/plain' },
+        { id: 'doc1', name: 'project_plan.txt', type: 'file', content: 'Here is the project plan...', createdAt: new Date('2023-04-15T14:30:00Z').toISOString(), size: 27, mimeType: 'text/plain' },
+        { id: 'notes-file', name: 'notes.txt', type: 'file', content: 'This is a persistent notepad.', createdAt: new Date('2023-02-20T11:00:00Z').toISOString(), size: 29, mimeType: 'text/plain' },
         { 
           id: 'work',
           name: 'Work',
           type: 'folder',
-          createdAt: new Date().toISOString(),
+          createdAt: new Date('2023-01-10T09:00:00Z').toISOString(),
           children: [
-             { id: 'report1', name: 'Q3_Report.txt', type: 'file', content: 'Q3 report content.', createdAt: new Date().toISOString(), size: 18, mimeType: 'text/plain' },
+             { id: 'report1', name: 'Q3_Report.txt', type: 'file', content: 'Q3 report content.', createdAt: new Date('2023-09-30T17:00:00Z').toISOString(), size: 18, mimeType: 'text/plain' },
           ]
         },
       ],
@@ -120,17 +126,17 @@ export const initialFileSystem: FileSystemNode = {
         id: 'pictures',
         name: 'Pictures',
         type: 'folder',
-        createdAt: new Date().toISOString(),
+        createdAt: new Date('2023-01-01T10:05:00Z').toISOString(),
         children: [
-            { id: 'pic1', name: 'vacation.jpg', type: 'file', content: 'https://picsum.photos/800/600', mimeType: 'image/jpeg', createdAt: new Date().toISOString(), size: 29 },
-            { id: 'pic2', name: 'logo.png', type: 'file', content: 'https://picsum.photos/400/400', mimeType: 'image/png', createdAt: new Date().toISOString(), size: 29 },
+            { id: 'pic1', name: 'vacation.jpg', type: 'file', content: 'https://images.unsplash.com/photo-1517760444937-f6397edcbbcd?q=80&w=2070', mimeType: 'image/jpeg', createdAt: new Date('2023-08-12T18:45:00Z').toISOString(), size: 120834 }, // Approx size
+            { id: 'pic2', name: 'logo.png', type: 'file', content: 'https://images.unsplash.com/photo-1629904853716-f0bc54eea48d?q=80&w=2070', mimeType: 'image/png', createdAt: new Date('2023-03-01T12:00:00Z').toISOString(), size: 98455 }, // Approx size
         ]
     },
     {
       id: 'trash',
       name: 'Trash',
       type: 'folder',
-      createdAt: new Date().toISOString(),
+      createdAt: new Date('2023-01-01T09:00:00Z').toISOString(),
       children: [],
     },
     {
@@ -138,7 +144,7 @@ export const initialFileSystem: FileSystemNode = {
       name: 'README.md',
       type: 'file',
       content: '# Welcome to WarmWind OS!\n\nThis is a virtual operating system running in your browser, powered by React and AI.\n\n## Keyboard Shortcuts\n\n- **Alt + F4**: Close the active window\n- **Ctrl + Alt + A**: Open AI Assistant\n- **Ctrl + Alt + E**: Open File Explorer',
-      createdAt: new Date().toISOString(),
+      createdAt: new Date('2023-01-01T09:05:00Z').toISOString(),
       size: 273,
       mimeType: 'text/markdown',
     },
