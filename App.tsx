@@ -1,3 +1,4 @@
+
 import React, { useState, useCallback, useMemo, createContext, useReducer, useRef, useEffect, useContext } from 'react';
 import { AppContextType, AppDefinition, AppId, WindowInstance, FileSystemNode, FileSystemAction, Theme, Notification } from './types';
 import { APP_DEFINITIONS, StartIcon, initialFileSystem, FolderIcon, FileTextIcon, ImageIcon, BellIcon } from './constants';
@@ -124,11 +125,7 @@ const TopMenuBar: React.FC = () => {
     
     const unreadCount = useMemo(() => notifications.filter(n => !n.read).length, [notifications]);
     
-    type SearchResultFile = FileSystemNode & { path: string };
-    const [searchResults, setSearchResults] = useState<{
-        apps: AppDefinition[];
-        files: SearchResultFile[];
-    }>({ apps: [], files: [] });
+    const [searchResults, setSearchResults] = useState<AppDefinition[]>([]);
 
     useEffect(() => {
         const timer = setInterval(() => setTime(new Date()), 1000 * 30);
@@ -137,7 +134,7 @@ const TopMenuBar: React.FC = () => {
 
     useEffect(() => {
         if (!searchQuery.trim()) {
-            setSearchResults({ apps: [], files: [] });
+            setSearchResults([]);
             return;
         }
         const query = searchQuery.toLowerCase();
@@ -145,21 +142,8 @@ const TopMenuBar: React.FC = () => {
         const filteredApps = APP_DEFINITIONS.filter(app =>
             app.name.toLowerCase().includes(query)
         );
-
-        const filteredFiles: SearchResultFile[] = [];
-        const searchFileSystem = (node: FileSystemNode, path: string) => {
-            if (node.name.toLowerCase().includes(query) && node.id !== 'root') {
-                filteredFiles.push({ ...node, path });
-            }
-            if (node.type === 'folder' && node.children) {
-                node.children.forEach(child => {
-                    searchFileSystem(child, `${path}/${child.name}`);
-                });
-            }
-        };
-        fileSystem.children?.forEach(child => searchFileSystem(child, `~/${child.name}`));
-        setSearchResults({ apps: filteredApps, files: filteredFiles });
-    }, [searchQuery, fileSystem]);
+        setSearchResults(filteredApps);
+    }, [searchQuery]);
 
     useEffect(() => {
         const handleClickOutside = (event: MouseEvent) => {
@@ -199,18 +183,6 @@ const TopMenuBar: React.FC = () => {
         });
         setMenuContextMenu(null);
     };
-
-    const handleFileClick = (file: SearchResultFile) => {
-        if (file.type === 'folder') {
-            openApp('file_explorer');
-        } else if (file.mimeType?.startsWith('image/')) {
-            openApp('media_viewer', { file });
-        } else {
-            openApp('text_editor', { file });
-        }
-        handleMenuToggle();
-    };
-
 
     const menuContextItems = menuContextMenu ? [
         { 
@@ -272,48 +244,21 @@ const TopMenuBar: React.FC = () => {
                                     </>
                                 ) : (
                                     <>
-                                        {searchResults.apps.length > 0 && (
-                                            <>
-                                                <li className="px-3 pt-2 pb-1 text-xs font-bold text-[var(--text-secondary)] opacity-70">Applications</li>
-                                                {searchResults.apps.map(app => (
-                                                    <li 
-                                                        key={app.id}
-                                                        onClick={() => { openApp(app.id); handleMenuToggle(); }} 
-                                                        className="px-3 py-2 hover:bg-[var(--hover-color)] cursor-pointer flex items-center gap-3"
-                                                        style={accentHoverStyle}
-                                                    >
-                                                        <app.icon className="w-6 h-6 flex-shrink-0" />
-                                                        <span>{app.name}</span>
-                                                    </li>
-                                                ))}
-                                            </>
-                                        )}
-                                        {searchResults.files.length > 0 && (
-                                            <>
-                                                <li className="px-3 pt-2 pb-1 text-xs font-bold text-[var(--text-secondary)] opacity-70">Files & Folders</li>
-                                                {searchResults.files.map(file => (
-                                                    <li 
-                                                        key={file.id}
-                                                        onClick={() => handleFileClick(file)}
-                                                        className="px-3 py-2 hover:bg-[var(--hover-color)] cursor-pointer flex items-center gap-3"
-                                                        style={accentHoverStyle}
-                                                    >
-                                                        {file.type === 'folder' 
-                                                            ? <FolderIcon className="w-6 h-6 flex-shrink-0" /> 
-                                                            : file.mimeType?.startsWith('image/')
-                                                                ? <ImageIcon className="w-6 h-6 flex-shrink-0" />
-                                                                : <FileTextIcon className="w-6 h-6 flex-shrink-0" />
-                                                        }
-                                                        <div className="flex flex-col overflow-hidden">
-                                                            <span className="truncate">{file.name}</span>
-                                                            <span className="text-xs truncate opacity-60">{file.path}</span>
-                                                        </div>
-                                                    </li>
-                                                ))}
-                                            </>
-                                        )}
-                                        {searchResults.apps.length === 0 && searchResults.files.length === 0 && (
-                                            <li className="px-3 py-2 text-[var(--text-secondary)] text-center">No results for "{searchQuery}"</li>
+                                        {searchResults.length > 0 ? (
+                                            searchResults.map(app => (
+                                                <li 
+                                                    key={app.id}
+                                                    onClick={() => { openApp(app.id); handleMenuToggle(); }} 
+                                                    onContextMenu={(e) => { e.preventDefault(); setMenuContextMenu({ x: e.clientX, y: e.clientY, app }); }}
+                                                    className="px-3 py-2 hover:bg-[var(--hover-color)] cursor-pointer flex items-center gap-3"
+                                                    style={accentHoverStyle}
+                                                >
+                                                    <app.icon className="w-6 h-6 flex-shrink-0" />
+                                                    <span>{app.name}</span>
+                                                </li>
+                                            ))
+                                        ) : (
+                                            <li className="px-3 py-2 text-[var(--text-secondary)] text-center">No applications found for "{searchQuery}"</li>
                                         )}
                                     </>
                                 )}
@@ -373,10 +318,11 @@ const TaskbarPreview: React.FC<{
             onMouseEnter={onMouseEnter}
             onMouseLeave={onMouseLeave}
         >
-            {runningWindows.map(win => (
+            {runningWindows.map((win, index) => (
                 <div
                     key={win.id}
                     onClick={() => focusApp(win.id)}
+                    style={{ animationDelay: `${index * 50}ms` }}
                     className="w-48 bg-[var(--bg-secondary)] backdrop-blur-xl rounded-lg shadow-lg border border-[var(--border-color)] p-2 cursor-pointer hover:border-[var(--accent-color)] transition-all animate-preview-in"
                 >
                     <div className="flex justify-between items-start gap-2">
@@ -501,7 +447,9 @@ const Taskbar: React.FC = () => {
                     onMouseLeave={hidePreview}
                 >
                     {taskbarApps.map(appDef => {
-                        const isRunning = windows.some(w => w.appId === appDef.id);
+                        const runningWindows = windows.filter(w => w.appId === appDef.id);
+                        const isRunning = runningWindows.length > 0;
+                        const isGrouped = runningWindows.length > 1;
                         const iconRef = getRef(appDef.id);
                         
                         const handleIconClick = () => {
@@ -528,7 +476,9 @@ const Taskbar: React.FC = () => {
                                 >
                                     <appDef.icon className="w-8 h-8" />
                                 </button>
-                                {isRunning && <div className="absolute bottom-1 left-1/2 -translate-x-1/2 w-1.5 h-1.5 bg-white rounded-full"></div>}
+                                {isRunning && (
+                                    <div className={`absolute bottom-1 left-1/2 -translate-x-1/2 h-1.5 bg-white rounded-full transition-all duration-200 ${isGrouped ? 'w-2.5' : 'w-1.5'}`}></div>
+                                )}
                             </div>
                         )
                     })}

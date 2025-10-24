@@ -1,13 +1,21 @@
 
+
 import React, { useState, useEffect, useRef, useContext, useCallback, useMemo } from 'react';
 import { AppContext } from '../App';
 import { FileSystemNode, ConversationMode, Message, Transcription, AppId, FileSystemAction, AppDefinition, Theme } from '../types';
-import { initialFileSystem, FileTextIcon, FolderIcon, NewFolderIcon, APP_DEFINITIONS, ImageIcon, ComputerIcon, AppsIcon, PaintBrushIcon, SpeakerIcon, TrashIcon, GridViewIcon, ListViewIcon, ZipIcon } from '../constants';
+import { initialFileSystem, FileTextIcon, FolderIcon, NewFolderIcon, APP_DEFINITIONS, ImageIcon, ComputerIcon, AppsIcon, PaintBrushIcon, SpeakerIcon, TrashIcon, GridViewIcon, ListViewIcon, ZipIcon, PreviewIcon, DownloadsIcon, GoogleDriveIcon } from '../constants';
 import geminiService from '../services/geminiService';
 import { decode, decodeAudioData, encode } from '../utils/audioUtils';
 // FIX: Removed unused and non-existent 'LiveSession' type from import.
 
 declare var JSZip: any;
+// FIX: Declare google and gapi on the window object to resolve TypeScript errors for Google Drive/Picker APIs.
+declare global {
+    interface Window {
+        google: any;
+        gapi: any;
+    }
+}
 
 // --- App Renderer ---
 export const AppRenderer: React.FC<{ appId: AppId, args?: any }> = ({ appId, args }) => {
@@ -379,697 +387,546 @@ export const ContextMenu: React.FC<{ x: number, y: number, items: { label: strin
     );
 };
 
-
 // --- File Explorer ---
-type SearchFilter = 'all' | 'folder' | 'text' | 'image';
-type SearchResult = FileSystemNode & { path: string };
-type SortKey = 'name' | 'size' | 'createdAt';
-
-export const FileExplorer: React.FC = () => {
+export const FileExplorer: React.FC<{ file?: FileSystemNode }> = ({ file: initialFile }) => {
     const { fileSystem, fsDispatch, openApp, theme, sendNotification } = useContext(AppContext)!;
-    const [currentPath, setCurrentPath] = useState<string[]>([]);
-    const [searchQuery, setSearchQuery] = useState('');
-    const [searchResults, setSearchResults] = useState<SearchResult[] | null>(null);
-    const [searchFilter, setSearchFilter] = useState<SearchFilter>('all');
-    const [renamingId, setRenamingId] = useState<string | null>(null);
-    const [contextMenu, setContextMenu] = useState<{ x: number, y: number, node?: FileSystemNode } | null>(null);
-    const [clipboard, setClipboard] = useState<FileSystemNode | null>(null);
-    const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
-    const [viewMode, setViewMode] = useState<'list' | 'grid'>('list');
-    const [sortConfig, setSortConfig] = useState<{ key: SortKey, direction: 'ascending' | 'descending' }>({ key: 'name', direction: 'ascending' });
-
-    const getCurrentNode = useCallback(() => {
-        let node = fileSystem;
-        for (const part of currentPath) {
-            const nextNode = node.children?.find(child => child.name === part && child.type === 'folder');
-            if (nextNode) {
-                node = nextNode;
-            }
-        }
-        return node;
-    }, [fileSystem, currentPath]);
-
-    const findNodeById = useCallback((nodeId: string, root: FileSystemNode = fileSystem): FileSystemNode | null => {
-        if (root.id === nodeId) return root;
-        if (root.children) {
-            for (const child of root.children) {
-                const found = findNodeById(nodeId, child);
+    
+    const findNodeById = (node: FileSystemNode, nodeId: string): FileSystemNode | null => {
+        if (node.id === nodeId) return node;
+        if (node.children) {
+            for (const child of node.children) {
+                const found = findNodeById(child, nodeId);
                 if (found) return found;
             }
         }
         return null;
-    }, [fileSystem]);
+    };
 
-
-    const handleDecompress = async (zipNode: FileSystemNode) => {
-        if (!zipNode.content || (zipNode.mimeType !== 'application/zip' && !zipNode.name.endsWith('.zip'))) return;
-
-        sendNotification({ appId: 'file_explorer', title: 'Decompressing...', message: `Extracting "${zipNode.name}".` });
-
-        try {
-            const zip = await JSZip.loadAsync(zipNode.content, { base64: true });
-            
-            const parentNode = getCurrentNode();
-            const extractionFolderName = zipNode.name.replace(/\.zip$/, '');
-
-            const extractionFolderNode: FileSystemNode = {
-                id: `folder-${Date.now()}-${Math.random()}`,
-                name: extractionFolderName,
-                type: 'folder',
-                children: [],
-                createdAt: new Date().toISOString(),
-            };
-            fsDispatch({ type: 'ADD_NODE', payload: { parentId: parentNode.id, node: extractionFolderNode } });
-
-            const createdDirs = new Map<string, string>();
-            createdDirs.set('', extractionFolderNode.id);
-
-            // FIX: Cast the result of Object.values to any[] to resolve typing issues with JSZip library.
-            const fileEntries = (Object.values(zip.files) as any[]).filter(file => !file.dir);
-            
-            for (const zipEntry of fileEntries) {
-                const pathParts = zipEntry.name.split('/').filter(p => p);
-                const fileName = pathParts.pop();
-                if (!fileName) continue;
-
-                let currentParentId = extractionFolderNode.id;
-                let builtPath = '';
-                for (const part of pathParts) {
-                    const parentPath = builtPath;
-                    builtPath = builtPath ? `${builtPath}/${part}` : part;
-                    if (!createdDirs.has(builtPath)) {
-                        const newFolderNode: FileSystemNode = {
-                            id: `folder-${Date.now()}-${Math.random()}`,
-                            name: part,
-                            type: 'folder',
-                            children: [],
-                            createdAt: new Date().toISOString(),
-                        };
-                        const parentIdForDispatch = createdDirs.get(parentPath)!;
-                        fsDispatch({ type: 'ADD_NODE', payload: { parentId: parentIdForDispatch, node: newFolderNode } });
-                        createdDirs.set(builtPath, newFolderNode.id);
+    const getPathForNode = (root: FileSystemNode, nodeId: string): string[] => {
+        const path: string[] = [];
+        const find = (node: FileSystemNode, id: string): boolean => {
+            if (node.id === id) {
+                path.unshift(node.id);
+                return true;
+            }
+            if (node.children) {
+                for (const child of node.children) {
+                    if (find(child, id)) {
+                        path.unshift(node.id);
+                        return true;
                     }
-                    currentParentId = createdDirs.get(builtPath)!;
                 }
-                
-                let content: string;
-                let size: number;
-                let mimeType: string = 'application/octet-stream';
-
-                if (/\.(txt|md|json|html|css|js)$/i.test(fileName)) {
-                    content = await zipEntry.async("string");
-                    size = new Blob([content]).size;
-                    if(fileName.endsWith('.txt')) mimeType = 'text/plain';
-                    if(fileName.endsWith('.md')) mimeType = 'text/markdown';
-                } else if (/\.(jpe?g|png|gif|webp)$/i.test(fileName)) {
-                    const base64Content = await zipEntry.async("base64");
-                    mimeType = `image/${fileName.split('.').pop()?.toLowerCase() || 'jpeg'}`;
-                    content = `data:${mimeType};base64,${base64Content}`;
-                    size = atob(base64Content).length;
-                } else {
-                    content = await zipEntry.async("base64");
-                    size = atob(content).length;
-                }
-                
-                const newFileNode: FileSystemNode = {
-                    id: `file-${Date.now()}-${Math.random()}`,
-                    name: fileName,
-                    type: 'file',
-                    content,
-                    createdAt: new Date().toISOString(),
-                    size,
-                    mimeType
-                };
-                fsDispatch({ type: 'ADD_NODE', payload: { parentId: currentParentId, node: newFileNode } });
             }
-            sendNotification({ appId: 'file_explorer', title: 'Decompression Complete', message: `Successfully extracted "${zipNode.name}".` });
-        } catch(error) {
-             console.error("Decompression failed:", error);
-             sendNotification({ appId: 'file_explorer', title: 'Decompression Failed', message: `Could not extract "${zipNode.name}". The file may be corrupt.` });
+            return false;
+        };
+        find(root, nodeId);
+        return path;
+    };
+    
+    const initialPath = useMemo(() => {
+        if (initialFile) return getPathForNode(fileSystem, initialFile.id);
+        const desktopNode = fileSystem.children?.find(c => c.id === 'desktop');
+        return desktopNode ? ['root', 'desktop'] : ['root'];
+    }, [initialFile, fileSystem]);
+
+    const [currentPath, setCurrentPath] = useState<string[]>(initialPath);
+    const [history, setHistory] = useState<string[][]>([initialPath]);
+    const [historyIndex, setHistoryIndex] = useState(0);
+    const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
+    const [previewFile, setPreviewFile] = useState<FileSystemNode | null>(null);
+    const [contextMenu, setContextMenu] = useState<{ x: number; y: number; node?: FileSystemNode } | null>(null);
+    const [creatingFolder, setCreatingFolder] = useState(false);
+    const [renamingNodeId, setRenamingNodeId] = useState<string | null>(null);
+    const [draggedNodeId, setDraggedNodeId] = useState<string | null>(null);
+    
+    // Google Drive State
+    const [googleApiLoaded, setGoogleApiLoaded] = useState(false);
+    const [tokenClient, setTokenClient] = useState<any>(null);
+    const [gdriveAccessToken, setGdriveAccessToken] = useState<string | null>(null);
+
+
+    const currentFolder = useMemo(() => {
+        let node = fileSystem;
+        for (let i = 1; i < currentPath.length; i++) {
+            node = node.children?.find(c => c.id === currentPath[i])!;
+        }
+        return node;
+    }, [currentPath, fileSystem]);
+
+    const navigateTo = useCallback((path: string[], newHistory = true) => {
+        setCurrentPath(path);
+        if (newHistory) {
+            const newHistoryStack = history.slice(0, historyIndex + 1);
+            newHistoryStack.push(path);
+            setHistory(newHistoryStack);
+            setHistoryIndex(newHistoryStack.length - 1);
+        }
+    }, [history, historyIndex]);
+
+    const handleBack = () => {
+        if (historyIndex > 0) {
+            const newIndex = historyIndex - 1;
+            setHistoryIndex(newIndex);
+            navigateTo(history[newIndex], false);
         }
     };
 
+    const handleForward = () => {
+        if (historyIndex < history.length - 1) {
+            const newIndex = historyIndex + 1;
+            setHistoryIndex(newIndex);
+            navigateTo(history[newIndex], false);
+        }
+    };
 
-    const handleNodeClick = (node: FileSystemNode) => {
+    const handleUp = () => {
+        if (currentPath.length > 1) {
+            navigateTo(currentPath.slice(0, -1));
+        }
+    };
+    
+    const handleFileClick = (node: FileSystemNode) => {
         if (node.type === 'folder') {
-            setSearchResults(null);
-            setSearchQuery('');
-            if ((node as SearchResult).path) {
-                const pathParts = (node as SearchResult).path.replace(/^~\//, '').split('/');
-                pathParts.pop();
-                setCurrentPath([...pathParts, node.name]);
-            } else {
-                 setCurrentPath([...currentPath, node.name]);
-            }
+            navigateTo([...currentPath, node.id]);
         } else {
-             if (node.mimeType === 'application/zip' || node.name.endsWith('.zip')) {
-                 handleDecompress(node);
-             } else if (node.mimeType?.startsWith('image/')) {
-                 openApp('media_viewer', { file: node });
-             } else {
-                 openApp('text_editor', { file: node });
-             }
-        }
-    };
-
-    const performSearch = useCallback(() => {
-        if (!searchQuery.trim()) {
-            setSearchResults(null);
-            return;
-        }
-
-        const results: SearchResult[] = [];
-        const query = searchQuery.toLowerCase();
-
-        const recursiveSearch = (node: FileSystemNode, currentPath: string) => {
-            let isMatch = false;
-
-            if (node.name.toLowerCase().includes(query)) {
-                isMatch = true;
-            }
-
-            if (!isMatch && node.type === 'file' && node.content && (node.mimeType === 'text/plain' || node.mimeType === 'text/markdown')) {
-                if (node.content.toLowerCase().includes(query)) {
-                    isMatch = true;
-                }
-            }
-
-            if (isMatch) {
-                results.push({ ...node, path: currentPath });
-            }
-
-            if (node.type === 'folder' && node.children) {
-                node.children.forEach(child => {
-                    const newPath = currentPath === '~' ? `~/${child.name}` : `${currentPath}/${child.name}`;
-                    recursiveSearch(child, newPath);
+            const mimeType = node.mimeType || '';
+            if (mimeType.startsWith('image/')) {
+                openApp('media_viewer', { file: node });
+            } else if (mimeType === 'text/plain' || mimeType === 'text/markdown' || !mimeType) {
+                openApp('text_editor', { file: node });
+            } else {
+                sendNotification({
+                    appId: 'file_explorer',
+                    title: 'Unsupported File Type',
+                    message: `Cannot open "${node.name}". Preview is not available for this file type.`
                 });
             }
-        };
-        
-        recursiveSearch(fileSystem, '~');
-        setSearchResults(results);
-    }, [searchQuery, fileSystem]);
-
-    const handleSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-        if (e.key === 'Enter') {
-            performSearch();
-        }
-    };
-    
-    const handleRename = (node: FileSystemNode, newName: string) => {
-        if (newName && newName !== node.name) {
-            fsDispatch({ type: 'UPDATE_NODE', payload: { nodeId: node.id, updates: { name: newName } } });
-        }
-        setRenamingId(null);
-    };
-
-    const handleMoveToTrash = (node: FileSystemNode) => {
-        let parentId: string | undefined;
-    
-        if ('path' in node && typeof (node as SearchResult).path === 'string') {
-            const pathParts = (node as SearchResult).path.replace(/^~\//, '').split('/');
-            pathParts.pop(); 
-            let parent = fileSystem;
-            for (const part of pathParts) {
-                parent = parent.children?.find(c => c.name === part) || parent;
-            }
-            parentId = parent.id;
-        } else {
-            parentId = getCurrentNode().id;
-        }
-    
-        if (!parentId) {
-            console.error("Could not find parent for node:", node);
-            return;
-        }
-
-        fsDispatch({ type: 'DELETE_NODE', payload: { nodeId: node.id, parentId: parentId } });
-        fsDispatch({ type: 'ADD_NODE', payload: { parentId: 'trash', node: { ...node, originalParentId: parentId } } });
-    };
-    
-    const handleRestore = (node: FileSystemNode) => {
-        if (!node.originalParentId) return;
-        const { originalParentId, ...restoredNodeProps } = node;
-        const restoredNode: FileSystemNode = restoredNodeProps;
-
-        fsDispatch({ type: 'DELETE_NODE', payload: { nodeId: node.id, parentId: 'trash' }});
-        fsDispatch({ type: 'ADD_NODE', payload: { parentId: originalParentId, node: restoredNode }});
-    };
-
-    const handleDeletePermanently = (node: FileSystemNode) => {
-        if (window.confirm(`Permanently delete "${node.name}"? This cannot be undone.`)) {
-            fsDispatch({ type: 'DELETE_NODE', payload: { nodeId: node.id, parentId: 'trash' } });
-        }
-    };
-    
-    const handleEmptyTrash = () => {
-        const trashNode = fileSystem.children?.find(c => c.id === 'trash');
-        if (trashNode && trashNode.children && trashNode.children.length > 0) {
-            if (window.confirm('Are you sure you want to permanently empty the Trash? All items will be deleted.')) {
-                fsDispatch({ type: 'EMPTY_TRASH' });
-            }
         }
     };
 
-    const handleCopy = (node: FileSystemNode) => {
-        setClipboard(node);
-    };
-
-    const handlePaste = useCallback(() => {
-        if (!clipboard) return;
-        const parentNode = getCurrentNode();
-
-        const createUniqueNodeCopy = (nodeToCopy: FileSystemNode, destinationChildren: FileSystemNode[]): FileSystemNode => {
-            const existingNames = new Set(destinationChildren.map(child => child.name));
-            let newName = nodeToCopy.name;
-
-            if (existingNames.has(newName)) {
-                const nameParts = nodeToCopy.name.split('.');
-                const extension = nameParts.length > 1 ? `.${nameParts.pop()}` : '';
-                const baseName = nameParts.join('.');
-                
-                newName = `${baseName} (copy)${extension}`;
-                if (existingNames.has(newName)) {
-                    let counter = 2;
-                    do {
-                        newName = `${baseName} (${counter})${extension}`;
-                        counter++;
-                    } while (existingNames.has(newName));
-                }
-            }
-
-            const deepCopy = (node: FileSystemNode): FileSystemNode => {
-                const newNode: FileSystemNode = {
-                    ...node,
-                    id: `${node.type}-${Date.now()}-${Math.random()}`,
-                };
-                if (node.children) {
-                    newNode.children = node.children.map(deepCopy);
-                }
-                return newNode;
-            };
-            
-            const copiedNode = deepCopy(nodeToCopy);
-            copiedNode.name = newName;
-            copiedNode.createdAt = new Date().toISOString();
-            
-            return copiedNode;
-        };
-        
-        const newNode = createUniqueNodeCopy(clipboard, parentNode.children || []);
-        fsDispatch({ type: 'ADD_NODE', payload: { parentId: parentNode.id, node: newNode } });
-        sendNotification({
-            appId: 'file_explorer',
-            title: 'File Pasted',
-            message: `'${newNode.name}' was successfully copied.`,
-        });
-    }, [clipboard, fsDispatch, getCurrentNode, sendNotification]);
-    
-    const handleCompress = async (nodeToCompress: FileSystemNode) => {
-        sendNotification({ appId: 'file_explorer', title: 'Compressing...', message: `Starting to compress "${nodeToCompress.name}".` });
-        const zip = new JSZip();
-
-        const addNodeToZip = async (currentZipFolder: any, node: FileSystemNode) => {
-            if (node.type === 'file') {
-                let fileContent: any = node.content || '';
-                if (node.mimeType?.startsWith('image/') && node.content) {
-                    try {
-                        const response = await fetch(node.content);
-                        fileContent = await response.blob();
-                    } catch (error) {
-                        console.error(`Failed to fetch image ${node.name}:`, error);
-                        fileContent = `Error: Could not fetch image content from ${node.content}`;
-                    }
-                }
-                currentZipFolder.file(node.name, fileContent);
-            } else if (node.type === 'folder' && node.children) {
-                const folder = currentZipFolder.folder(node.name);
-                for (const child of node.children) {
-                    await addNodeToZip(folder, child);
-                }
-            }
-        };
-
-        try {
-            await addNodeToZip(zip, nodeToCompress);
-            const zipContent = await zip.generateAsync({ type: 'base64' });
-
-            const parentNode = getCurrentNode();
-            const zipFileName = `${nodeToCompress.name.split('.')[0]}.zip`;
-            
-            const newNode: FileSystemNode = {
-                id: `file-${Date.now()}-${Math.random()}`,
-                name: zipFileName,
-                type: 'file',
-                content: zipContent,
-                createdAt: new Date().toISOString(),
-                size: atob(zipContent).length,
-                mimeType: 'application/zip',
-            };
-
-            fsDispatch({ type: 'ADD_NODE', payload: { parentId: parentNode.id, node: newNode } });
-            sendNotification({ appId: 'file_explorer', title: 'Compression Complete', message: `Successfully created "${zipFileName}".` });
-        } catch (error) {
-            console.error("Compression failed:", error);
-            sendNotification({ appId: 'file_explorer', title: 'Compression Failed', message: `Could not compress "${nodeToCompress.name}".` });
-        }
-    };
-
-
-    const handleContextMenu = (e: React.MouseEvent, node: FileSystemNode) => {
+    const handleContextMenu = (e: React.MouseEvent, node?: FileSystemNode) => {
         e.preventDefault();
         e.stopPropagation();
         setContextMenu({ x: e.clientX, y: e.clientY, node });
     };
 
-    const handleCreateFolder = () => {
-        const parentNode = getCurrentNode();
-        const existingNames = parentNode.children?.map(child => child.name) || [];
-        
-        let newFolderName = 'New Folder';
-        let counter = 2;
-        while (existingNames.includes(newFolderName)) {
-            newFolderName = `New Folder (${counter})`;
-            counter++;
-        }
-
+    const createFolder = (name: string) => {
         const newNode: FileSystemNode = {
-            id: `folder-${Date.now()}-${Math.random()}`,
-            name: newFolderName,
+            id: `folder-${Date.now()}`,
+            name: name,
             type: 'folder',
             children: [],
             createdAt: new Date().toISOString(),
         };
-
-        fsDispatch({ type: 'ADD_NODE', payload: { parentId: parentNode.id, node: newNode } });
-        setRenamingId(newNode.id);
+        fsDispatch({ type: 'ADD_NODE', payload: { parentId: currentFolder.id, node: newNode } });
+        setCreatingFolder(false);
     };
 
-    const handleBackgroundContextMenu = (e: React.MouseEvent) => {
-        if (e.target === e.currentTarget) {
-            e.preventDefault();
-            e.stopPropagation();
-            setContextMenu({ x: e.clientX, y: e.clientY });
-        }
-    };
-
-    const currentNode = getCurrentNode();
-    const isTrashFolder = currentNode.id === 'trash';
-
-    const contextMenuItems = useMemo(() => {
-        if (!contextMenu) return [];
-        
-        if (contextMenu.node) {
-            if (isTrashFolder) {
-                 return [
-                    { label: 'Restore', action: () => handleRestore(contextMenu.node!) },
-                    { label: 'Delete Permanently', action: () => handleDeletePermanently(contextMenu.node!) },
-                ];
-            }
-            
-            const isZip = contextMenu.node.name.endsWith('.zip') || contextMenu.node.mimeType === 'application/zip';
-            
-            const items = [
-                { label: 'Open', action: () => handleNodeClick(contextMenu.node!) },
-            ];
-
-            if (isZip) {
-                items.push({ label: 'Decompress', action: () => handleDecompress(contextMenu.node!) });
-            } else {
-                items.push({ label: 'Compress', action: () => handleCompress(contextMenu.node!) });
-            }
-
-            items.push(
-                { label: 'Copy', action: () => handleCopy(contextMenu.node!) },
-                { label: 'Rename', action: () => setRenamingId(contextMenu.node!.id) },
-                { label: 'Delete', action: () => handleMoveToTrash(contextMenu.node!) },
-                { label: 'Properties', action: () => openApp('properties_viewer', { file: contextMenu.node! }) }
-            );
-            return items;
-        } else {
-            if (isTrashFolder) {
-                const trashNode = fileSystem.children?.find(c => c.id === 'trash');
-                if (!trashNode || !trashNode.children || trashNode.children.length === 0) return [];
-                return [{ label: 'Empty Trash', action: handleEmptyTrash }];
-            }
-            const items = [{ label: 'New Folder', action: handleCreateFolder }];
-            if (clipboard) {
-                items.push({ label: 'Paste', action: handlePaste });
-            }
-            return items;
-        }
-    }, [contextMenu, clipboard, handlePaste, isTrashFolder, fileSystem]);
-    
-    // FIX: Cast style object with custom property to React.CSSProperties to satisfy TypeScript.
-    const accentHoverStyle = {
-      '--hover-bg-color': `${theme.accentColor}33` // Add alpha for hover
-    } as React.CSSProperties;
-
-    const filteredResults = useMemo(() => {
-        if (!searchResults) return [];
-        if (searchFilter === 'all') return searchResults;
-        return searchResults.filter(node => {
-            switch (searchFilter) {
-                case 'folder': return node.type === 'folder';
-                case 'text': return node.mimeType === 'text/plain' || node.mimeType === 'text/markdown';
-                case 'image': return node.mimeType?.startsWith('image/');
-                default: return true;
-            }
+    const deleteNode = (node: FileSystemNode) => {
+        const trashFolderId = 'trash';
+        const updatedNode = { ...node, originalParentId: currentFolder.id }; // Store original location
+        fsDispatch({ type: 'DELETE_NODE', payload: { nodeId: node.id, parentId: currentFolder.id } });
+        fsDispatch({ type: 'ADD_NODE', payload: { parentId: trashFolderId, node: updatedNode } });
+        sendNotification({
+            appId: 'file_explorer',
+            title: 'File Moved to Trash',
+            message: `"${node.name}" was moved to the Trash.`
         });
-    }, [searchResults, searchFilter]);
+    };
 
-    const searchFilters: { id: SearchFilter, label: string }[] = [
-        { id: 'all', label: 'All' },
-        { id: 'folder', label: 'Folders' },
-        { id: 'text', label: 'Text' },
-        { id: 'image', label: 'Images' },
+    const renameNode = (nodeId: string, newName: string) => {
+        fsDispatch({ type: 'UPDATE_NODE', payload: { nodeId, updates: { name: newName } } });
+        setRenamingNodeId(null);
+    };
+    
+    const handleDragStart = (e: React.DragEvent, nodeId: string) => {
+        setDraggedNodeId(nodeId);
+        e.dataTransfer.effectAllowed = 'move';
+    };
+
+    const handleDrop = (e: React.DragEvent, targetNode: FileSystemNode) => {
+        e.preventDefault();
+        setDraggedNodeId(null);
+        if (!draggedNodeId || draggedNodeId === targetNode.id || targetNode.type !== 'folder') return;
+        
+        const draggedNode = findNodeById(fileSystem, draggedNodeId);
+        if (!draggedNode) return;
+        
+        // Find parent of dragged node
+        const sourcePath = getPathForNode(fileSystem, draggedNodeId);
+        const sourceParentId = sourcePath[sourcePath.length - 2];
+        
+        if (sourceParentId === targetNode.id) return; // Dropped on its own parent
+
+        fsDispatch({ type: 'DELETE_NODE', payload: { nodeId: draggedNodeId, parentId: sourceParentId } });
+        fsDispatch({ type: 'ADD_NODE', payload: { parentId: targetNode.id, node: draggedNode } });
+    };
+
+    const emptyTrash = () => {
+        const trashNode = findNodeById(fileSystem, 'trash');
+        if (trashNode && trashNode.children && trashNode.children.length > 0) {
+            if (window.confirm('Are you sure you want to permanently delete all items in the Trash? This action cannot be undone.')) {
+                fsDispatch({ type: 'EMPTY_TRASH' });
+                sendNotification({
+                    appId: 'file_explorer',
+                    title: 'Trash Emptied',
+                    message: `All items have been permanently deleted.`
+                });
+            }
+        }
+    };
+    
+    const sidebarLocations: { name: string; id: string; icon: React.FC<any>}[] = [
+        { name: 'Desktop', id: 'desktop', icon: ComputerIcon },
+        { name: 'Documents', id: 'documents', icon: FileTextIcon },
+        { name: 'Downloads', id: 'downloads', icon: DownloadsIcon },
+        { name: 'Pictures', id: 'pictures', icon: ImageIcon },
+        { name: 'Trash', id: 'trash', icon: TrashIcon },
     ];
+    
+    // --- Google Drive Integration ---
+    useEffect(() => {
+        const initializeGis = () => {
+            const clientId = process.env.GOOGLE_CLIENT_ID;
+            if (clientId && !clientId.includes('YOUR_CLIENT_ID')) {
+                const client = window.google.accounts.oauth2.initTokenClient({
+                    client_id: clientId,
+                    scope: 'https://www.googleapis.com/auth/drive.readonly',
+                    callback: (tokenResponse: any) => {
+                        if (tokenResponse && tokenResponse.access_token) {
+                            setGdriveAccessToken(tokenResponse.access_token);
+                        }
+                    },
+                });
+                setTokenClient(client);
+            }
+            setGoogleApiLoaded(true);
+        };
 
-    const sortedNodes = useMemo(() => {
-        const nodesToSort = [...(currentNode.children || [])];
-        if (sortConfig.key) {
-            nodesToSort.sort((a, b) => {
-                if (a.type === 'folder' && b.type !== 'folder') return -1;
-                if (a.type !== 'folder' && b.type === 'folder') return 1;
-    
-                let comparison = 0;
-                switch(sortConfig.key) {
-                    case 'name':
-                        comparison = a.name.localeCompare(b.name);
-                        break;
-                    case 'size':
-                        comparison = (a.size ?? -1) - (b.size ?? -1);
-                        break;
-                    case 'createdAt':
-                        comparison = new Date(a.createdAt ?? 0).getTime() - new Date(b.createdAt ?? 0).getTime();
-                        break;
-                    default:
-                        comparison = 0;
+        if (window.google?.accounts && window.gapi) {
+            initializeGis();
+            return;
+        }
+
+        const gisScript = document.createElement('script');
+        gisScript.src = 'https://accounts.google.com/gsi/client';
+        gisScript.async = true;
+        gisScript.defer = true;
+        document.body.appendChild(gisScript);
+
+        const gapiScript = document.createElement('script');
+        gapiScript.src = 'https://apis.google.com/js/api.js';
+        gapiScript.async = true;
+        gapiScript.defer = true;
+        document.body.appendChild(gapiScript);
+
+        let scriptsLoaded = 0;
+        const onScriptLoad = () => {
+            scriptsLoaded++;
+            if (scriptsLoaded === 2) {
+                window.gapi.load('client:picker', initializeGis);
+            }
+        };
+
+        gisScript.onload = onScriptLoad;
+        gapiScript.onload = onScriptLoad;
+
+    }, []);
+
+    const pickerCallback = useCallback((data: any) => {
+        if (data.action === window.google.picker.Action.PICKED) {
+            const doc = data.docs[0];
+            const fileId = doc.id;
+            const fileName = doc.name;
+            const mimeType = doc.mimeType;
+
+            sendNotification({
+                appId: 'file_explorer',
+                title: 'Importing from Drive',
+                message: `Downloading "${fileName}"...`
+            });
+
+            fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
+                headers: { 'Authorization': `Bearer ${gdriveAccessToken}` }
+            })
+            .then(res => {
+                if (!res.ok) throw new Error(`Download failed: ${res.statusText}`);
+                if (mimeType.startsWith('text/') || ['application/json', 'text/markdown'].includes(mimeType)) {
+                    return res.text().then(content => ({ content, size: new Blob([content]).size }));
+                } else {
+                    return res.blob().then(blob => new Promise((resolve, reject) => {
+                        const reader = new FileReader();
+                        reader.onloadend = () => resolve({ content: reader.result as string, size: blob.size });
+                        reader.onerror = reject;
+                        reader.readAsDataURL(blob);
+                    }));
                 }
-    
-                return sortConfig.direction === 'ascending' ? comparison : -comparison;
+            })
+            .then(({ content, size }) => {
+                const newNode: FileSystemNode = {
+                    id: `gdrive-${fileId}-${Date.now()}`,
+                    name: fileName,
+                    type: 'file',
+                    content,
+                    mimeType,
+                    createdAt: new Date().toISOString(),
+                    size
+                };
+                const downloadsFolder = findNodeById(fileSystem, 'downloads');
+                const parentId = downloadsFolder ? 'downloads' : 'root';
+                fsDispatch({ type: 'ADD_NODE', payload: { parentId, node: newNode } });
+                sendNotification({
+                    appId: 'file_explorer',
+                    title: 'Import Complete',
+                    message: `Imported "${fileName}" to Downloads.`
+                });
+            })
+            .catch(error => {
+                console.error('Drive import error:', error);
+                sendNotification({
+                    appId: 'file_explorer',
+                    title: 'Import Failed',
+                    message: `Could not import "${fileName}". See console for details.`
+                });
             });
         }
-        return nodesToSort;
-    }, [currentNode.children, sortConfig]);
+    }, [gdriveAccessToken, fsDispatch, sendNotification, fileSystem]);
 
-    const requestSort = (key: SortKey) => {
-        let direction: 'ascending' | 'descending' = 'ascending';
-        if (sortConfig.key === key && sortConfig.direction === 'ascending') {
-            direction = 'descending';
+    const createPicker = useCallback((token: string) => {
+        if (!token || !process.env.API_KEY) {
+            sendNotification({
+                appId: 'file_explorer',
+                title: 'API Key Missing',
+                message: 'Gemini API key is required to use Google Picker.'
+            });
+            return;
         }
-        setSortConfig({ key, direction });
+        const view = new window.google.picker.View(window.google.picker.ViewId.DOCS);
+        view.setMimeTypes("image/png,image/jpeg,image/jpg,text/plain,application/pdf,application/zip,text/markdown");
+
+        const picker = new window.google.picker.PickerBuilder()
+            .enableFeature(window.google.picker.Feature.NAV_HIDDEN)
+            .setOAuthToken(token)
+            .addView(view)
+            .setDeveloperKey(process.env.API_KEY)
+            .setCallback(pickerCallback)
+            .build();
+        picker.setVisible(true);
+    }, [pickerCallback, sendNotification]);
+
+    const handleGoogleDriveConnect = () => {
+        const clientId = process.env.GOOGLE_CLIENT_ID;
+        if (!clientId || clientId.includes('YOUR_CLIENT_ID')) {
+            sendNotification({
+                appId: 'file_explorer',
+                title: 'Google Drive Setup Required',
+                message: 'Please configure your Google Client ID. Opening README for instructions.'
+            });
+            const readmeNode = findNodeById(fileSystem, 'readme');
+            if (readmeNode?.type === 'file') {
+                openApp('text_editor', { file: readmeNode, title: "About This OS" });
+            }
+            return;
+        }
+
+        if (!googleApiLoaded) {
+            sendNotification({
+                appId: 'file_explorer',
+                title: 'Google API Loading',
+                message: 'Please wait a moment and try again.'
+            });
+            return;
+        }
+
+        if (gdriveAccessToken) {
+            createPicker(gdriveAccessToken);
+        } else if (tokenClient) {
+            tokenClient.callback = (tokenResponse: any) => {
+                if (tokenResponse?.access_token) {
+                    const token = tokenResponse.access_token;
+                    setGdriveAccessToken(token);
+                    createPicker(token);
+                }
+            };
+            tokenClient.requestAccessToken({ prompt: 'consent' });
+        }
     };
 
-    const formatBytes = (bytes: number | undefined) => {
-        if (bytes === undefined || bytes === null || !+bytes) return '-';
-        const k = 1024;
-        const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
-        const i = Math.floor(Math.log(bytes) / Math.log(k));
-        return `${parseFloat((bytes / Math.pow(k, i)).toFixed(i === 0 ? 0 : 1))} ${sizes[i]}`;
-    }
+    const renderNode = (node: FileSystemNode) => {
+        const isRenaming = renamingNodeId === node.id;
+        const Icon = node.type === 'folder' ? FolderIcon : (
+            node.mimeType?.startsWith('image/') ? ImageIcon : 
+            (node.mimeType === 'application/zip' ? ZipIcon : FileTextIcon)
+        );
 
-    const PathBreadcrumbs = () => {
-        const pathParts = ['~', ...currentPath];
-        return (
-            <div className="flex-grow bg-[var(--bg-primary)] rounded px-2 py-1 text-sm flex items-center space-x-1 overflow-x-auto">
-                {pathParts.map((part, index) => (
-                    <React.Fragment key={index}>
-                        <button
-                            onClick={() => {
-                                setSearchResults(null);
-                                setSearchQuery('');
-                                setCurrentPath(pathParts.slice(1, index + 1));
-                            }}
-                            className="hover:underline flex-shrink-0"
-                        >
-                            {part === '~' ? <ComputerIcon className="w-4 h-4" /> : part}
-                        </button>
-                        {index < pathParts.length - 1 && <span className="text-[var(--text-secondary)]">/</span>}
-                    </React.Fragment>
-                ))}
+        const itemContent = (
+             <div
+                onDoubleClick={() => handleFileClick(node)}
+                onContextMenu={(e) => handleContextMenu(e, node)}
+                draggable
+                onDragStart={(e) => handleDragStart(e, node.id)}
+                onDragOver={(e) => node.type === 'folder' && e.preventDefault()}
+                onDrop={(e) => handleDrop(e, node)}
+                className={`flex items-center p-2 rounded-md cursor-pointer group ${viewMode === 'list' ? 'flex-row gap-2' : 'flex-col gap-1 w-28 h-28 justify-center text-center'}`}
+            >
+                <Icon className={viewMode === 'grid' ? "w-12 h-12" : "w-6 h-6"} />
+                {isRenaming ? (
+                    <input
+                        type="text"
+                        defaultValue={node.name}
+                        onBlur={(e) => renameNode(node.id, e.target.value)}
+                        onKeyDown={(e) => e.key === 'Enter' && renameNode(node.id, (e.target as HTMLInputElement).value)}
+                        autoFocus
+                        onClick={e => e.stopPropagation()}
+                        className="bg-[var(--bg-tertiary)] text-[var(--text-primary)] rounded-sm p-1 text-sm w-full"
+                    />
+                ) : (
+                    <span className="text-sm text-[var(--text-primary)] break-words w-full group-hover:text-[var(--accent-color)]">{node.name}</span>
+                )}
+            </div>
+        );
+        return viewMode === 'list' ? (
+            <tr key={node.id} className="hover:bg-[var(--bg-tertiary)] border-b border-[var(--border-color)] last:border-b-0">
+                <td className="p-0">{itemContent}</td>
+                <td className="p-2 text-sm text-[var(--text-secondary)]">{node.type}</td>
+                <td className="p-2 text-sm text-[var(--text-secondary)]">{node.createdAt ? new Date(node.createdAt).toLocaleDateString() : 'N/A'}</td>
+                <td className="p-2 text-sm text-[var(--text-secondary)]">{node.size ? `${(node.size / 1024).toFixed(1)} KB` : '--'}</td>
+            </tr>
+        ) : (
+            <div key={node.id} className="hover:bg-[var(--bg-tertiary)] rounded-lg">
+                {itemContent}
             </div>
         );
     };
 
-    const SortableHeader: React.FC<{ sortKey: SortKey, label: string, className?: string }> = ({ sortKey, label, className }) => {
-        const isSorted = sortConfig.key === sortKey;
-        const icon = isSorted ? (sortConfig.direction === 'ascending' ? '▲' : '▼') : '';
-        return (
-            <button onClick={() => requestSort(sortKey)} className={`flex items-center gap-1 ${className}`}>
-                {label} <span className="text-xs">{icon}</span>
-            </button>
-        );
-    };
-    
+    const contextMenuItems = useMemo(() => {
+        const items = [];
+        const node = contextMenu?.node;
+        if (node) {
+            items.push({ label: 'Open', action: () => handleFileClick(node) });
+            items.push({ label: 'Rename', action: () => setRenamingNodeId(node.id) });
+            items.push({ label: 'Delete', action: () => deleteNode(node) });
+            items.push({ label: 'Properties', action: () => openApp('properties_viewer', { file: node }) });
+
+        } else { // Clicked on background
+            items.push({ label: 'New Folder', action: () => setCreatingFolder(true) });
+            items.push({ label: 'Toggle View', action: () => setViewMode(v => v === 'grid' ? 'list' : 'grid') });
+            if (previewFile) {
+                items.push({ label: 'Close Preview', action: () => setPreviewFile(null) });
+            }
+        }
+        if (currentFolder.id === 'trash') {
+            items.push({ label: 'Empty Trash', action: emptyTrash });
+        }
+        return items;
+    }, [contextMenu, previewFile, currentFolder.id]);
+
     return (
-        <div className="h-full flex flex-col text-[var(--text-primary)]">
-            <div className="flex-shrink-0 bg-[var(--bg-secondary)] border-b border-[var(--border-color)]">
-                <div className="flex items-center p-2 space-x-2">
-                    <button onClick={() => setCurrentPath(currentPath.slice(0, -1))} disabled={currentPath.length === 0} className="p-1 rounded hover:bg-[var(--bg-tertiary)] disabled:opacity-50">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6"/></svg>
-                    </button>
-                    <button onClick={handleCreateFolder} className="p-1 rounded hover:bg-[var(--bg-tertiary)]" title="New Folder">
-                        <NewFolderIcon className="w-5 h-5" />
-                    </button>
-                    <PathBreadcrumbs />
-                     {isTrashFolder && (
-                        <button onClick={handleEmptyTrash} className="px-3 py-1 text-sm bg-red-500 text-white rounded hover:bg-red-600 disabled:opacity-50 flex items-center gap-1.5" disabled={currentNode.children?.length === 0}>
-                            <TrashIcon className="w-4 h-4" />
-                            Empty Trash
-                        </button>
-                    )}
-                    <div className="flex items-center space-x-1">
-                        <button onClick={() => setViewMode('list')} className={`p-1 rounded ${viewMode === 'list' ? 'bg-[var(--bg-tertiary)]' : 'hover:bg-[var(--bg-tertiary)]'}`} title="List View"><ListViewIcon className="w-5 h-5" /></button>
-                        <button onClick={() => setViewMode('grid')} className={`p-1 rounded ${viewMode === 'grid' ? 'bg-[var(--bg-tertiary)]' : 'hover:bg-[var(--bg-tertiary)]'}`} title="Grid View"><GridViewIcon className="w-5 h-5" /></button>
-                    </div>
-                    <input
-                        type="text"
-                        placeholder="Search entire filesystem..."
-                        className="bg-[var(--bg-primary)] rounded px-2 py-1 text-sm w-48 focus:outline-none focus:ring-1"
-                        style={{'--tw-ring-color': theme.accentColor} as React.CSSProperties}
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
-                        onKeyDown={handleSearchKeyDown}
-                    />
+        <div className="h-full flex flex-col bg-transparent text-[var(--text-primary)]">
+            {/* Top Bar */}
+            <div className="flex-shrink-0 flex items-center p-1.5 border-b border-[var(--border-color)] gap-2">
+                <button onClick={handleBack} disabled={historyIndex === 0} className="p-2 rounded hover:bg-[var(--bg-tertiary)] disabled:opacity-50"><svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg></button>
+                <button onClick={handleForward} disabled={historyIndex >= history.length - 1} className="p-2 rounded hover:bg-[var(--bg-tertiary)] disabled:opacity-50"><svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg></button>
+                <button onClick={handleUp} disabled={currentPath.length <= 1} className="p-2 rounded hover:bg-[var(--bg-tertiary)] disabled:opacity-50"><svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 10l7-7m0 0l7 7m-7-7v18" /></svg></button>
+                <div className="flex-grow flex items-center bg-[var(--bg-tertiary)] rounded-md px-2 text-sm">
+                    {currentPath.map((id, index) => {
+                        const folder = findNodeById(fileSystem, id);
+                        return (
+                            <React.Fragment key={id}>
+                                <button onClick={() => navigateTo(currentPath.slice(0, index + 1))} className="px-2 py-1 hover:bg-[var(--bg-secondary)] rounded-sm">{folder?.name || '...'}</button>
+                                {index < currentPath.length - 1 && <span className="text-[var(--text-secondary)]">/</span>}
+                            </React.Fragment>
+                        );
+                    })}
                 </div>
-                {searchResults !== null && (
-                     <div className="px-3 pb-2 flex items-center gap-2 border-t border-[var(--border-color)] pt-2">
-                        <span className="text-xs font-semibold text-[var(--text-secondary)]">Filter:</span>
-                        {searchFilters.map(filter => (
-                            <button key={filter.id} onClick={() => setSearchFilter(filter.id)} 
-                                className={`px-2 py-0.5 text-xs rounded-full transition-colors ${searchFilter === filter.id ? 'text-white' : 'hover:bg-[var(--bg-tertiary)]'}`}
-                                style={{ backgroundColor: searchFilter === filter.id ? theme.accentColor : 'transparent' }}>
-                                {filter.label}
-                            </button>
-                        ))}
+                 <button onClick={handleGoogleDriveConnect} title="Connect Google Drive" className="p-2 rounded hover:bg-[var(--bg-tertiary)]">
+                    <GoogleDriveIcon className="w-5 h-5" />
+                </button>
+                <button onClick={() => setViewMode('list')} className={`p-2 rounded hover:bg-[var(--bg-tertiary)] ${viewMode === 'list' && 'text-[var(--accent-color)]'}`}><ListViewIcon className="w-4 h-4" /></button>
+                <button onClick={() => setViewMode('grid')} className={`p-2 rounded hover:bg-[var(--bg-tertiary)] ${viewMode === 'grid' && 'text-[var(--accent-color)]'}`}><GridViewIcon className="w-4 h-4" /></button>
+                <button onClick={() => setPreviewFile(previewFile ? null : (currentFolder?.children?.[0] || null))} className={`p-2 rounded hover:bg-[var(--bg-tertiary)] ${previewFile && 'text-[var(--accent-color)]'}`}><PreviewIcon className="w-4 h-4" /></button>
+            </div>
+            
+            <div className="flex-grow flex overflow-hidden">
+                {/* Sidebar */}
+                <div className="w-48 flex-shrink-0 p-2 border-r border-[var(--border-color)] overflow-y-auto">
+                    <ul className="space-y-1">
+                        {sidebarLocations.map(loc => {
+                            const node = findNodeById(fileSystem, loc.id);
+                            if (!node) return null;
+                            const isSelected = currentPath.length === 2 && currentPath[1] === loc.id;
+                            return (
+                                <li key={loc.id}>
+                                    <button onClick={() => navigateTo(['root', loc.id])}
+                                        style={isSelected ? { backgroundColor: theme.accentColor, color: 'white' } : {}}
+                                        className="w-full flex items-center gap-2 p-2 text-sm rounded-md hover:bg-[var(--bg-tertiary)]">
+                                        <loc.icon className="w-5 h-5 flex-shrink-0" />
+                                        <span>{loc.name}</span>
+                                    </button>
+                                </li>
+                            );
+                        })}
+                    </ul>
+                </div>
+                
+                {/* Main Content */}
+                <div className="flex-grow overflow-auto" onContextMenu={handleContextMenu} onClick={() => setContextMenu(null)}>
+                    {viewMode === 'list' ? (
+                        <table className="w-full text-left">
+                            <thead className="border-b border-[var(--border-color)] text-sm text-[var(--text-secondary)]">
+                                <tr><th className="p-2 font-semibold">Name</th><th className="p-2 font-semibold">Type</th><th className="p-2 font-semibold">Date Modified</th><th className="p-2 font-semibold">Size</th></tr>
+                            </thead>
+                            <tbody>
+                                {currentFolder.children?.map(renderNode)}
+                            </tbody>
+                        </table>
+                    ) : (
+                        <div className="p-4 grid grid-cols-[repeat(auto-fill,minmax(7rem,1fr))] gap-4">
+                            {currentFolder.children?.map(renderNode)}
+                        </div>
+                    )}
+
+                    {creatingFolder && (
+                         <div className="p-4 inline-block">
+                             <div className="flex flex-col items-center gap-1 w-28 text-center p-2">
+                                 <NewFolderIcon className="w-12 h-12" />
+                                 <input
+                                     type="text"
+                                     placeholder="New Folder"
+                                     onBlur={(e) => { if(e.target.value) createFolder(e.target.value); else setCreatingFolder(false); }}
+                                     onKeyDown={(e) => { if(e.key === 'Enter') createFolder((e.target as HTMLInputElement).value); if(e.key === 'Escape') setCreatingFolder(false); }}
+                                     autoFocus
+                                     className="bg-[var(--bg-tertiary)] text-[var(--text-primary)] rounded-sm p-1 text-sm w-full"
+                                 />
+                             </div>
+                         </div>
+                    )}
+
+                    {currentFolder?.children?.length === 0 && !creatingFolder && (
+                        <div className="h-full flex items-center justify-center text-[var(--text-secondary)]">
+                            <p>This folder is empty.</p>
+                        </div>
+                    )}
+                </div>
+
+                {/* Preview Pane */}
+                {previewFile && (
+                    <div className="w-64 flex-shrink-0 border-l border-[var(--border-color)] p-4 flex flex-col items-center text-center overflow-y-auto">
+                        <button onClick={() => setPreviewFile(null)} className="self-end p-1 rounded-full hover:bg-[var(--bg-tertiary)]">&times;</button>
+                        {(previewFile.mimeType?.startsWith('image/')) ? (
+                            <img src={previewFile.content} alt={previewFile.name} className="max-w-full rounded-md mt-4" />
+                        ) : (
+                            <FileTextIcon className="w-24 h-24 text-[var(--text-secondary)] mt-4" />
+                        )}
+                        <h3 className="mt-4 font-semibold break-all">{previewFile.name}</h3>
+                        <p className="text-sm text-[var(--text-secondary)] mt-2">
+                            Type: {previewFile.mimeType || 'Unknown'} <br />
+                            Size: {previewFile.size ? `${(previewFile.size / 1024).toFixed(1)} KB` : 'N/A'} <br />
+                            Created: {previewFile.createdAt ? new Date(previewFile.createdAt).toLocaleDateString() : 'N/A'}
+                        </p>
                     </div>
                 )}
             </div>
-
-            {searchResults !== null ? (
-                // SEARCH RESULTS VIEW (simplified list view)
-                <div className="flex-grow p-2 overflow-y-auto" onClick={() => setSelectedNodeId(null)}>
-                    <div className="flex justify-between items-center mb-2 px-2">
-                         <p className="text-sm text-[var(--text-secondary)]">Found {filteredResults.length} result(s)</p>
-                        <button onClick={() => { setSearchQuery(''); setSearchResults(null); }} className="text-sm px-2 py-1 rounded hover:bg-[var(--bg-tertiary)]" style={{ color: theme.accentColor }}>Clear Search</button>
-                    </div>
-                    {filteredResults.length > 0 ? (
-                        <ul className="space-y-1">
-                            {filteredResults.map((node) => {
-                                const isSelected = selectedNodeId === node.id;
-                                return (
-                                <li key={node.id} onDoubleClick={() => handleNodeClick(node)} onContextMenu={(e) => handleContextMenu(e, node)} 
-                                    onClick={(e) => {e.stopPropagation(); setSelectedNodeId(node.id)}}
-                                    className={`flex items-center space-x-3 px-2 py-1.5 rounded cursor-pointer transition-colors duration-150 ${ isSelected ? 'text-white' : `hover:bg-[var(--hover-bg-color)]` }`}
-                                    style={isSelected ? { backgroundColor: theme.accentColor } : accentHoverStyle}
-                                >
-                                    <div className="flex-shrink-0" style={{ filter: isSelected ? 'brightness(0) invert(1)' : 'none' }}>
-                                        {node.type === 'folder' ? <FolderIcon className="w-6 h-6" /> : <FileTextIcon className="w-6 h-6" />}
-                                    </div>
-                                    <div className='flex flex-col overflow-hidden'>
-                                        <span className="truncate">{node.name}</span>
-                                        <span className={`text-xs truncate ${isSelected ? 'text-white/70' : 'text-[var(--text-secondary)]'}`}>{node.path}</span>
-                                    </div>
-                                </li>
-                            )})}
-                        </ul>
-                    ) : (
-                        <div className="h-full flex items-center justify-center text-center text-[var(--text-secondary)]"><p>No results found for "{searchQuery}".</p></div>
-                    )}
-                </div>
-            ) : viewMode === 'list' ? (
-                // LIST VIEW
-                <div className="flex-grow overflow-y-auto" onClick={() => { setContextMenu(null); setSelectedNodeId(null); }} onContextMenu={handleBackgroundContextMenu}>
-                    <div className="grid grid-cols-[auto_1fr_100px_150px] gap-x-4 px-2 py-1 text-xs font-semibold text-[var(--text-secondary)] border-b border-[var(--border-color)] sticky top-0 bg-[var(--window-content-bg)]">
-                        <div />
-                        <SortableHeader sortKey='name' label='Name' className='text-left' />
-                        <SortableHeader sortKey='size' label='Size' className='justify-end' />
-                        <SortableHeader sortKey='createdAt' label='Date Modified' className='justify-end' />
-                    </div>
-                    <ul className="p-2 space-y-px">
-                        {sortedNodes.map((node) => {
-                            const isSelected = selectedNodeId === node.id;
-                            const isZip = node.name.endsWith('.zip') || node.mimeType === 'application/zip';
-                            return (
-                            <li key={node.id} onDoubleClick={() => handleNodeClick(node)} onContextMenu={(e) => handleContextMenu(e, node)}
-                                onClick={(e) => { e.stopPropagation(); setSelectedNodeId(node.id)}}
-                                className={`grid grid-cols-[auto_1fr_100px_150px] gap-x-4 items-center px-2 py-1.5 rounded cursor-pointer transition-colors duration-150 ${ isSelected ? 'text-white' : 'hover:bg-[var(--hover-bg-color)]' }`}
-                                style={isSelected ? { backgroundColor: theme.accentColor } : accentHoverStyle}
-                            >
-                                <div className="flex-shrink-0" style={{ filter: isSelected ? 'brightness(0) invert(1)' : 'none' }}>
-                                    {isZip ? <ZipIcon className="w-6 h-6" /> : node.type === 'folder' ? <FolderIcon className="w-6 h-6" /> : <FileTextIcon className="w-6 h-6" />}
-                                </div>
-                                {renamingId === node.id ? (
-                                    <input type="text" defaultValue={node.name} onBlur={(e) => handleRename(node, e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleRename(node, e.currentTarget.value)} className="bg-transparent p-0 m-0 border-0 outline-none w-full" autoFocus onClick={(e) => e.stopPropagation()}/>
-                                ) : (
-                                    <div className='flex flex-col overflow-hidden'>
-                                        <span className="truncate">{node.name}</span>
-                                         {isTrashFolder && node.originalParentId && (<span className={`text-xs truncate ${isSelected ? 'text-white/70' : 'text-[var(--text-secondary)]'}`}>From: {findNodeById(node.originalParentId)?.name || 'Unknown Location'}</span>)}
-                                    </div>
-                                )}
-                                <span className="text-right text-sm text-[var(--text-secondary)]">{formatBytes(node.size)}</span>
-                                <span className="text-right text-sm text-[var(--text-secondary)]">{node.createdAt ? new Date(node.createdAt).toLocaleString() : '-'}</span>
-                            </li>
-                        )})}
-                    </ul>
-                     {currentNode.children?.length === 0 && (<div className="h-full flex items-center justify-center text-center text-[var(--text-secondary)]"><p>{isTrashFolder ? 'Trash is empty.' : 'This folder is empty.'}</p></div>)}
-                </div>
-            ) : (
-                // GRID VIEW
-                <div className="flex-grow p-4 overflow-y-auto" onClick={() => { setContextMenu(null); setSelectedNodeId(null); }} onContextMenu={handleBackgroundContextMenu}>
-                    <ul className="grid grid-cols-[repeat(auto-fill,minmax(100px,1fr))] gap-4">
-                         {sortedNodes.map((node) => {
-                            const isSelected = selectedNodeId === node.id;
-                            const isZip = node.name.endsWith('.zip') || node.mimeType === 'application/zip';
-                            return (
-                            <li key={node.id} onDoubleClick={() => handleNodeClick(node)} onContextMenu={(e) => handleContextMenu(e, node)}
-                                onClick={(e) => { e.stopPropagation(); setSelectedNodeId(node.id)}}
-                                className={`flex flex-col items-center text-center w-28 h-28 p-2 rounded-lg cursor-pointer transition-colors duration-150 ${ isSelected ? 'text-white' : 'hover:bg-[var(--hover-bg-color)]' }`}
-                                style={isSelected ? { backgroundColor: theme.accentColor } : accentHoverStyle}
-                            >
-                                <div className="w-16 h-16 flex items-center justify-center mb-1" style={{ filter: isSelected ? 'brightness(0) invert(1)' : 'none' }}>
-                                    {node.type === 'file' && node.mimeType?.startsWith('image/') ? (
-                                        <img src={node.content} alt={node.name} className="max-w-full max-h-full object-cover rounded-md" />
-                                    ) : isZip ? (
-                                        <ZipIcon className="w-16 h-16" />
-                                    ) : node.type === 'folder' ? (
-                                        <FolderIcon className="w-16 h-16" />
-                                    ) : (
-                                        <FileTextIcon className="w-16 h-16" />
-                                    )}
-                                </div>
-                                {renamingId === node.id ? (
-                                    <input type="text" defaultValue={node.name} onBlur={(e) => handleRename(node, e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleRename(node, e.currentTarget.value)} className="bg-transparent text-center p-0 m-0 border-0 outline-none w-full text-xs" autoFocus onClick={(e) => e.stopPropagation()} style={{color: isSelected ? 'white' : 'inherit'}} />
-                                ) : (
-                                     <span className="text-xs break-words w-full truncate">{node.name}</span>
-                                )}
-                            </li>
-                        )})}
-                    </ul>
-                     {currentNode.children?.length === 0 && (<div className="h-full flex items-center justify-center text-center text-[var(--text-secondary)]"><p>{isTrashFolder ? 'Trash is empty.' : 'This folder is empty.'}</p></div>)}
-                </div>
-            )}
             {contextMenu && <ContextMenu x={contextMenu.x} y={contextMenu.y} items={contextMenuItems} onClose={() => setContextMenu(null)} />}
         </div>
     );
@@ -1078,353 +935,256 @@ export const FileExplorer: React.FC = () => {
 
 // --- Terminal ---
 export const Terminal: React.FC<{ initialCommand?: string }> = ({ initialCommand }) => {
-    const [lines, setLines] = useState<string[]>(['Welcome to WarmWind OS Terminal.', 'Type "help" for a list of commands.']);
+    const { fileSystem } = useContext(AppContext)!;
+    const [history, setHistory] = useState<string[]>(['Welcome to WarmWind OS Terminal']);
     const [input, setInput] = useState('');
-    const endOfTerminalRef = useRef<null | HTMLDivElement>(null);
+    const inputRef = useRef<HTMLInputElement>(null);
+    const containerRef = useRef<HTMLDivElement>(null);
 
-    const executeCommand = useCallback((command: string) => {
-        const trimmedCommand = command.trim();
-        if (!trimmedCommand) return;
-
-        if (trimmedCommand.toLowerCase() === 'clear') {
-            setLines([]);
-            return;
-        }
-
-        const newLines = [`> ${trimmedCommand}`];
+    const handleCommand = (cmd: string) => {
+        const newHistory = [...history, `> ${cmd}`];
+        const [command, ...args] = cmd.split(' ');
         let output = '';
-        switch (trimmedCommand.toLowerCase()) {
+
+        // Simple command handling
+        switch (command) {
             case 'help':
-                output = 'Available commands: help, clear, date, about';
+                output = 'Available commands: help, clear, ls, echo, date';
+                break;
+            case 'clear':
+                setHistory([]);
+                return;
+            case 'echo':
+                output = args.join(' ');
                 break;
             case 'date':
                 output = new Date().toString();
                 break;
-            case 'about':
-                output = 'WarmWind OS v1.0 - AI Virtual PC';
+            case 'ls':
+                // For simplicity, lists root files. A real terminal would track cwd.
+                output = fileSystem.children?.map(c => c.name).join('  ') || 'Empty';
                 break;
             default:
-                output = `command not found: ${trimmedCommand}`;
+                output = `command not found: ${command}`;
         }
-        setLines(prev => [...prev, ...newLines, output]);
-    }, []);
-
-    const handleInputSubmit = () => {
-        executeCommand(input);
-        setInput('');
+        setHistory([...newHistory, output]);
     };
 
     useEffect(() => {
         if (initialCommand) {
-            const commands = initialCommand.split('\n');
-            commands.forEach(cmd => {
-                if (cmd.trim()) {
-                    executeCommand(cmd);
-                }
-            });
+            handleCommand(initialCommand);
         }
-    }, [initialCommand, executeCommand]);
+    }, [initialCommand]);
 
     useEffect(() => {
-        endOfTerminalRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }, [lines]);
+        containerRef.current?.scrollTo(0, containerRef.current.scrollHeight);
+    }, [history]);
 
     return (
-        <div className="h-full bg-black text-green-400 font-mono p-2 text-sm overflow-y-auto" onClick={() => document.getElementById('terminal-input')?.focus()}>
-            {lines.map((line, i) => <div key={i} className="whitespace-pre-wrap">{line}</div>)}
+        <div className="h-full bg-black text-green-400 font-mono p-2 text-sm overflow-y-auto" ref={containerRef} onClick={() => inputRef.current?.focus()}>
+            {history.map((line, index) => <div key={index}>{line}</div>)}
             <div className="flex">
                 <span>&gt;&nbsp;</span>
                 <input
-                    id="terminal-input"
+                    ref={inputRef}
                     type="text"
                     value={input}
-                    onChange={e => setInput(e.target.value)}
-                    onKeyPress={e => e.key === 'Enter' && handleInputSubmit()}
-                    className="bg-transparent border-none outline-none text-green-400 flex-grow"
+                    onChange={(e) => setInput(e.target.value)}
+                    onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                            handleCommand(input);
+                            setInput('');
+                        }
+                    }}
+                    className="flex-grow bg-transparent border-none outline-none text-green-400"
                     autoFocus
                 />
             </div>
-            <div ref={endOfTerminalRef} />
         </div>
     );
 };
-
 
 // --- Settings ---
-const SettingsCategory: React.FC<{
-    icon: React.ComponentType<{ className?: string }>;
-    label: string;
-    isActive: boolean;
-    onClick: () => void;
-}> = ({ icon: Icon, label, isActive, onClick }) => {
-    const { theme } = useContext(AppContext)!;
-    return (
-        <li
-            onClick={onClick}
-            style={{ 
-                backgroundColor: isActive ? `${theme.accentColor}B3` : undefined, // B3 = 70% opacity
-                color: isActive ? 'white' : 'var(--text-primary)'
-            }}
-            className={`flex items-center space-x-3 p-2 rounded-xl cursor-pointer transition-colors duration-200 hover:bg-[var(--bg-tertiary)]`}
-        >
-            <Icon className="w-6 h-6" />
-            <span className="font-semibold">{label}</span>
-        </li>
-    );
-};
-
-const PersonalizationSettings: React.FC = () => {
-    const { wallpaper, setWallpaper, theme } = useContext(AppContext)!;
-    const wallpapers = [
-        'https://images.unsplash.com/photo-1451187580459-43490279c0fa?q=80&w=2072&auto=format&fit=crop',
-        'https://images.unsplash.com/photo-1534796636912-3b95b3ab5986?q=80&w=2071&auto=format&fit=crop',
-        'https://images.unsplash.com/photo-1462331940025-496dfbfc7564?q=80&w=1841&auto=format&fit=crop',
-        'https://images.unsplash.com/photo-1506318137071-a8e063b4bec0?q=80&w=2093&auto=format&fit=crop',
-    ];
-
-    return (
-        <div>
-            <h2 className="text-2xl font-bold mb-4 text-[var(--text-primary)]">Personalization</h2>
-            <h3 className="font-semibold text-lg mb-3 text-[var(--text-primary)]">Change Wallpaper</h3>
-            <div className="grid grid-cols-2 gap-4">
-                {wallpapers.map(url => (
-                    <img
-                        key={url}
-                        src={url}
-                        onClick={() => setWallpaper(url)}
-                        className={`w-full h-32 object-cover rounded-lg cursor-pointer border-4 transition-all`}
-                        style={{ borderColor: wallpaper === url ? theme.accentColor : 'transparent' }}
-                        alt="Wallpaper option"
-                    />
-                ))}
-            </div>
-        </div>
-    );
-};
-
-const AppearanceSettings: React.FC = () => {
-    const { theme, setTheme } = useContext(AppContext)!;
-
-    const accentColors = ['#3b82f6', '#ef4444', '#22c55e', '#f97316', '#8b5cf6', '#ec4899'];
-    const fonts = [
-        { name: 'System Sans-serif', value: "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" },
-        { name: 'Serif', value: "Georgia, 'Times New Roman', Times, serif" },
-        { name: 'Monospace', value: "'Courier New', Courier, monospace" },
-    ];
-
-    return (
-        <div>
-            <h2 className="text-2xl font-bold mb-4 text-[var(--text-primary)]">Appearance</h2>
-
-            {/* --- Mode --- */}
-            <div className="mb-6">
-                <h3 className="font-semibold text-lg mb-3 text-[var(--text-primary)]">Mode</h3>
-                <div className="flex space-x-2 p-1 bg-[var(--bg-secondary)] rounded-lg">
-                    <button onClick={() => setTheme(t => ({...t, mode: 'light'}))} className={`flex-1 py-2 text-sm font-semibold rounded-md ${theme.mode === 'light' ? 'text-black' : ''}`}
-                        style={{ backgroundColor: theme.mode === 'light' ? 'white' : 'transparent' }}>Light</button>
-                    <button onClick={() => setTheme(t => ({...t, mode: 'dark'}))} className={`flex-1 py-2 text-sm font-semibold rounded-md ${theme.mode === 'dark' ? 'text-white' : ''}`}
-                        style={{ backgroundColor: theme.mode === 'dark' ? 'var(--bg-tertiary)' : 'transparent' }}>Dark</button>
-                </div>
-            </div>
-            
-            {/* --- Accent Color --- */}
-            <div className="mb-6">
-                <h3 className="font-semibold text-lg mb-3 text-[var(--text-primary)]">Accent Color</h3>
-                <div className="flex space-x-3">
-                    {accentColors.map(color => (
-                        <button key={color} onClick={() => setTheme(t => ({...t, accentColor: color}))}
-                            className={`w-10 h-10 rounded-full border-4 transition-transform transform hover:scale-110`}
-                            style={{ backgroundColor: color, borderColor: theme.accentColor === color ? 'white' : 'transparent' }} />
-                    ))}
-                </div>
-            </div>
-
-            {/* --- Font --- */}
-            <div>
-                <h3 className="font-semibold text-lg mb-3 text-[var(--text-primary)]">Font</h3>
-                <select 
-                    value={theme.fontFamily}
-                    onChange={(e) => setTheme(t => ({...t, fontFamily: e.target.value}))}
-                    className="w-full p-2 rounded-lg bg-[var(--bg-secondary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:ring-2"
-                    style={{'--tw-ring-color': theme.accentColor} as React.CSSProperties}
-                >
-                    {fonts.map(font => <option key={font.name} value={font.value}>{font.name}</option>)}
-                </select>
-            </div>
-        </div>
-    );
-};
-
-const SystemSettings: React.FC = () => (
-    <div>
-        <h2 className="text-2xl font-bold mb-4 text-[var(--text-primary)]">System</h2>
-        <div className="bg-[var(--bg-secondary)] p-4 rounded-lg">
-            <h3 className="text-xl font-semibold mb-4 border-b border-[var(--border-color)] pb-2 text-[var(--text-primary)]">About WarmWind OS</h3>
-            <ul className="space-y-2 text-sm">
-                <li className="flex justify-between">
-                    <span className="text-[var(--text-secondary)]">OS Name:</span>
-                    <span className="text-[var(--text-primary)]">WarmWind OS</span>
-                </li>
-                <li className="flex justify-between">
-                    <span className="text-[var(--text-secondary)]">Version:</span>
-                    <span className="text-[var(--text-primary)]">1.0 (Brave Heron)</span>
-                </li>
-                <li className="flex justify-between">
-                    <span className="text-[var(--text-secondary)]">Build:</span>
-                    <span className="text-[var(--text-primary)]">WWOS-24A-GEMINI</span>
-                </li>
-                <li className="flex justify-between">
-                    <span className="text-[var(--text-secondary)]">Processor:</span>
-                    <span className="text-[var(--text-primary)]">Virtual AI Core (Gemini 2.5 Pro)</span>
-                </li>
-                <li className="flex justify-between">
-                    <span className="text-[var(--text-secondary)]">Installed RAM:</span>
-                    <span className="text-[var(--text-primary)]">(Browser Allocated)</span>
-                </li>
-            </ul>
-        </div>
-    </div>
-);
-
-const AppSettings: React.FC = () => (
-    <div>
-        <h2 className="text-2xl font-bold mb-4 text-[var(--text-primary)]">Apps</h2>
-        <p className="text-[var(--text-secondary)] mb-4">List of all applications installed on WarmWind OS.</p>
-        <ul className="space-y-2">
-            {APP_DEFINITIONS.map(app => (
-                 <li key={app.id} className="flex items-center space-x-4 p-2 bg-[var(--bg-secondary)] rounded-lg">
-                    <app.icon className="w-8 h-8" />
-                    <span className="font-semibold text-[var(--text-primary)]">{app.name}</span>
-                </li>
-            ))}
-        </ul>
-    </div>
-);
-
-
 export const Settings: React.FC = () => {
-    const [activeCategory, setActiveCategory] = useState('appearance');
+    const { wallpaper, setWallpaper, theme, setTheme } = useContext(AppContext)!;
+    const [newWallpaperUrl, setNewWallpaperUrl] = useState(wallpaper);
+    const fonts = ['system-ui', 'monospace', 'serif', 'cursive'];
+    const accentColors = ['#3b82f6', '#ef4444', '#22c55e', '#f97316', '#a855f7'];
 
-    const categories = [
-        { id: 'appearance', label: 'Appearance', icon: PaintBrushIcon },
-        { id: 'personalization', label: 'Personalization', icon: ImageIcon },
-        { id: 'system', label: 'System', icon: ComputerIcon },
-        { id: 'apps', label: 'Apps', icon: AppsIcon },
-    ];
-
-    const renderContent = () => {
-        switch (activeCategory) {
-            case 'appearance':
-                return <AppearanceSettings />;
-            case 'personalization':
-                return <PersonalizationSettings />;
-            case 'system':
-                return <SystemSettings />;
-            case 'apps':
-                return <AppSettings />;
-            default:
-                return null;
+    const handleWallpaperChange = () => {
+        if (newWallpaperUrl.trim()) {
+            setWallpaper(newWallpaperUrl);
         }
+    };
+    
+    const updateTheme = (updates: Partial<Theme>) => {
+        setTheme(prev => ({ ...prev, ...updates }));
     };
 
     return (
-        <div className="h-full flex bg-transparent">
-            <aside className="w-56 flex-shrink-0 bg-[var(--bg-secondary)] p-4">
-                <h1 className="text-xl font-bold mb-6 text-[var(--text-primary)]">Settings</h1>
-                <ul className="space-y-2">
-                    {categories.map(cat => (
-                        <SettingsCategory
-                            key={cat.id}
-                            label={cat.label}
-                            icon={cat.icon}
-                            isActive={activeCategory === cat.id}
-                            onClick={() => setActiveCategory(cat.id)}
-                        />
-                    ))}
+        <div className="h-full flex text-[var(--text-primary)]">
+            <div className="w-48 flex-shrink-0 p-2 border-r border-[var(--border-color)]">
+                <ul>
+                    <li className="p-2 rounded-md bg-[var(--bg-tertiary)] font-semibold">Appearance</li>
                 </ul>
-            </aside>
-            <main className="flex-grow p-6 overflow-y-auto">
-                {renderContent()}
-            </main>
+            </div>
+            <div className="flex-grow p-6 overflow-y-auto">
+                <h2 className="text-2xl font-bold mb-6">Appearance</h2>
+
+                <div className="mb-8">
+                    <h3 className="text-lg font-semibold mb-2">Wallpaper</h3>
+                    <div className="flex items-center gap-2">
+                        <input
+                            type="text"
+                            value={newWallpaperUrl}
+                            onChange={(e) => setNewWallpaperUrl(e.target.value)}
+                            className="flex-grow bg-[var(--bg-tertiary)] text-[var(--text-primary)] placeholder-[var(--text-secondary)] px-3 py-2 rounded-md border border-[var(--border-color)] focus:outline-none focus:ring-1"
+                            style={{'--tw-ring-color': theme.accentColor} as React.CSSProperties}
+                            placeholder="Enter image URL"
+                        />
+                        <button onClick={handleWallpaperChange} style={{ backgroundColor: theme.accentColor }} className="text-white px-4 py-2 rounded-md hover:opacity-90">Set</button>
+                    </div>
+                    <img src={wallpaper} alt="Current wallpaper preview" className="mt-4 w-48 h-28 object-cover rounded-md border-2 border-[var(--border-color)]" />
+                </div>
+                
+                 <div className="mb-8">
+                    <h3 className="text-lg font-semibold mb-2">Theme Mode</h3>
+                     <div className="flex gap-4">
+                        <button onClick={() => updateTheme({ mode: 'light' })} className={`px-4 py-2 rounded-md border ${theme.mode === 'light' ? 'border-[var(--accent-color)]' : 'border-[var(--border-color)]'}`}>Light</button>
+                        <button onClick={() => updateTheme({ mode: 'dark' })} className={`px-4 py-2 rounded-md border ${theme.mode === 'dark' ? 'border-[var(--accent-color)]' : 'border-[var(--border-color)]'}`}>Dark</button>
+                    </div>
+                </div>
+
+                <div className="mb-8">
+                    <h3 className="text-lg font-semibold mb-2">Accent Color</h3>
+                    <div className="flex gap-3">
+                        {accentColors.map(color => (
+                            <button key={color} onClick={() => updateTheme({ accentColor: color })}
+                                style={{ backgroundColor: color }}
+                                className={`w-8 h-8 rounded-full border-2 ${theme.accentColor === color ? 'border-white' : 'border-transparent'}`}></button>
+                        ))}
+                    </div>
+                </div>
+                
+                <div>
+                    <h3 className="text-lg font-semibold mb-2">Font Family</h3>
+                    <select value={theme.fontFamily} onChange={(e) => updateTheme({ fontFamily: e.target.value })}
+                        className="bg-[var(--bg-tertiary)] text-[var(--text-primary)] px-3 py-2 rounded-md border border-[var(--border-color)] focus:outline-none">
+                        {fonts.map(font => <option key={font} value={font}>{font}</option>)}
+                    </select>
+                </div>
+            </div>
         </div>
     );
 };
-
 
 // --- Text Editor ---
 export const TextEditor: React.FC<{ file?: FileSystemNode }> = ({ file }) => {
     const { fsDispatch } = useContext(AppContext)!;
+    const [content, setContent] = useState(file?.content || '');
+    const [isDirty, setIsDirty] = useState(false);
 
-    if (!file) {
-        return (
-            <div className="w-full h-full bg-[var(--bg-secondary)] text-[var(--text-secondary)] flex items-center justify-center">
-                <p>No file open. Open a file from the File Explorer.</p>
-            </div>
-        );
-    }
+    useEffect(() => {
+        const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+            if (isDirty) {
+                e.preventDefault();
+                e.returnValue = '';
+            }
+        };
+        window.addEventListener('beforeunload', handleBeforeUnload);
+        return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+    }, [isDirty]);
     
-    const [content, setContent] = useState(file.content || '');
-
     const handleSave = () => {
-        fsDispatch({ type: 'UPDATE_NODE', payload: { nodeId: file.id, updates: { content, size: new Blob([content]).size } } });
+        if (file) {
+            fsDispatch({ type: 'UPDATE_NODE', payload: { nodeId: file.id, updates: { content, size: new Blob([content]).size } } });
+            setIsDirty(false);
+        }
+    };
+    
+    const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+        setContent(e.target.value);
+        if (!isDirty) setIsDirty(true);
     };
 
     return (
-        <textarea
-            value={content}
-            onChange={(e) => setContent(e.target.value)}
-            onBlur={handleSave}
-            className="w-full h-full bg-transparent text-[var(--text-primary)] p-4 font-mono text-sm border-none outline-none resize-none"
-        />
+        <div className="h-full flex flex-col bg-transparent">
+            {file && (
+                 <div className="flex-shrink-0 p-2 border-b border-[var(--border-color)]">
+                    <button onClick={handleSave} className="px-3 py-1 bg-blue-600 text-white rounded-md text-sm hover:bg-blue-500 disabled:bg-gray-500" disabled={!isDirty}>
+                        Save {isDirty && '*'}
+                    </button>
+                 </div>
+            )}
+            <textarea
+                value={content}
+                onChange={handleChange}
+                className="flex-grow w-full h-full bg-transparent text-[var(--text-primary)] p-4 resize-none focus:outline-none font-mono"
+                placeholder="Start typing..."
+            />
+        </div>
     );
 };
-
 
 // --- Calculator ---
 export const Calculator: React.FC = () => {
     const [display, setDisplay] = useState('0');
-    
-    const handleButtonClick = (value: string) => {
-        if(value === 'C') return setDisplay('0');
-        if(value === '=') {
-            try {
-                // Using eval is unsafe in real apps, but fine for this demo.
-                setDisplay(eval(display.replace(/x/g, '*')).toString());
-            } catch {
-                setDisplay('Error');
-            }
-            return;
-        }
-        if(display === '0' || display === 'Error') {
-            setDisplay(value);
+    const [expression, setExpression] = useState('');
+
+    const handleInput = (char: string) => {
+        if (display === '0' && char !== '.') {
+            setDisplay(char);
         } else {
-            setDisplay(display + value);
+            setDisplay(display + char);
         }
     };
     
-    const buttons = ['C', '/', 'x', '=', '7', '8', '9', '-', '4', '5', '6', '+', '1', '2', '3', '0', '.',];
-    
-     const getButtonClass = (btn: string) => {
-        const baseClass = "text-2xl rounded-xl focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-800 focus:ring-blue-500 transition-transform transform active:scale-95 shadow-md text-white font-semibold";
-        if (['/', 'x', '-', '+', '='].includes(btn)) {
-            return `${baseClass} bg-orange-500 hover:bg-orange-400`;
-        }
-        if (btn === 'C') {
-            return `${baseClass} bg-gray-500 hover:bg-gray-400`;
-        }
-        return `${baseClass} bg-gray-600 hover:bg-gray-500`;
-    }
+    const handleOperator = (op: string) => {
+        setExpression(display + op);
+        setDisplay('0');
+    };
 
+    const handleEquals = () => {
+        try {
+            // Using Function constructor for safe evaluation
+            const result = new Function(`return ${expression}${display}`)();
+            setDisplay(String(result));
+            setExpression('');
+        } catch (error) {
+            setDisplay('Error');
+        }
+    };
+    
+    const handleClear = () => {
+        setDisplay('0');
+        setExpression('');
+    };
+
+    const buttons = [
+        '7', '8', '9', '/',
+        '4', '5', '6', '*',
+        '1', '2', '3', '-',
+        '0', '.', '=', '+'
+    ];
+
+    const handleButtonClick = (btn: string) => {
+        if (!isNaN(Number(btn)) || btn === '.') {
+            handleInput(btn);
+        } else if (btn === '=') {
+            handleEquals();
+        } else {
+            handleOperator(btn);
+        }
+    };
+    
     return (
-        <div className="h-full bg-transparent p-2 flex flex-col">
-            <div className="bg-gray-900 text-white text-4xl text-right p-4 rounded-xl mb-2 truncate">{display}</div>
-            <div className="grid grid-cols-4 gap-2 flex-grow">
-                 {buttons.map(btn => (
-                    <button 
-                        key={btn} 
-                        onClick={() => handleButtonClick(btn)} 
-                        className={`${getButtonClass(btn)} ${btn === '0' ? 'col-span-2' : ''}`}
-                    >
+        <div className="h-full flex flex-col bg-gray-800 p-4 text-white">
+            <div className="flex-grow bg-gray-700 rounded-lg p-4 text-right text-4xl mb-4 break-all">{display}</div>
+            <div className="grid grid-cols-4 gap-2">
+                <button onClick={handleClear} className="col-span-4 p-4 bg-gray-600 rounded-lg hover:bg-gray-500 text-2xl">C</button>
+                {buttons.map(btn => (
+                    <button key={btn} onClick={() => handleButtonClick(btn)}
+                        className={`p-4 rounded-lg text-2xl ${'/*-+='.includes(btn) ? 'bg-orange-500 hover:bg-orange-400' : 'bg-gray-600 hover:bg-gray-500'}`}>
                         {btn}
                     </button>
                 ))}
@@ -1434,370 +1194,97 @@ export const Calculator: React.FC = () => {
 };
 
 // --- Browser ---
-type Tab = {
-  id: string;
-  history: string[];
-  currentIndex: number;
-  title: string;
-  favicon: string | null;
-  isLoading: boolean;
-  isBlocked: boolean;
-};
-
-const initialUrl = "https://www.google.com/webhp?igu=1";
-const getFaviconUrl = (pageUrl: string) => {
-    try {
-        const url = new URL(pageUrl);
-        return `https://t1.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=${url.origin}&size=16`;
-    } catch (e) {
-        return null;
-    }
-};
-
-const createNewTab = (): Tab => ({
-    id: `tab-${Date.now()}-${Math.random()}`,
-    history: [initialUrl],
-    currentIndex: 0,
-    title: "New Tab",
-    favicon: getFaviconUrl(initialUrl),
-    isLoading: true,
-    isBlocked: false,
-});
-
 export const Browser: React.FC = () => {
-    const { theme } = useContext(AppContext)!;
-    const [tabs, setTabs] = useState<Tab[]>([createNewTab()]);
-    const [activeTabId, setActiveTabId] = useState<string>(tabs[0].id);
-    const [inputValue, setInputValue] = useState(initialUrl);
-    const iframeRef = useRef<HTMLIFrameElement>(null);
+    const [url, setUrl] = useState('https://www.google.com/webhp?igu=1');
+    const [iframeSrc, setIframeSrc] = useState(url);
 
-    const activeTab = useMemo(() => tabs.find(t => t.id === activeTabId)!, [tabs, activeTabId]);
-    const currentUrl = activeTab.history[activeTab.currentIndex];
-
-    useEffect(() => {
-        setInputValue(currentUrl);
-    }, [currentUrl]);
-
-    const updateTab = useCallback((tabId: string, updates: Partial<Tab>) => {
-        setTabs(prevTabs => prevTabs.map(t => t.id === tabId ? { ...t, ...updates } : t));
-    }, []);
-
-    const navigateTo = (url: string, tabId: string) => {
-        let newUrl = url.trim();
-        if (!/^(https?:\/\/)/i.test(newUrl) && newUrl.includes('.')) {
-            newUrl = 'https://' + newUrl;
-        } else if (!newUrl.includes('.') && !newUrl.startsWith('https://') && !newUrl.startsWith('http://')) {
-            newUrl = `https://www.google.com/search?q=${encodeURIComponent(newUrl)}`;
+    const handleGo = () => {
+        let finalUrl = url;
+        if (!url.startsWith('http')) {
+            finalUrl = `https://www.google.com/search?q=${encodeURIComponent(url)}`;
         }
-        
-        const tab = tabs.find(t => t.id === tabId);
-        if (!tab) return;
-
-        const newHistory = tab.history.slice(0, tab.currentIndex + 1);
-        newHistory.push(newUrl);
-
-        updateTab(tabId, { 
-            history: newHistory, 
-            currentIndex: newHistory.length - 1,
-            isLoading: true,
-            isBlocked: false,
-            title: newUrl,
-            favicon: getFaviconUrl(newUrl),
-        });
+        setIframeSrc(finalUrl);
     };
-
-    const handleAddNewTab = () => {
-        const newTab = createNewTab();
-        setTabs([...tabs, newTab]);
-        setActiveTabId(newTab.id);
-    };
-
-    const handleCloseTab = (tabId: string, e: React.MouseEvent) => {
-        e.stopPropagation();
-        const newTabs = tabs.filter(t => t.id !== tabId);
-        if (newTabs.length === 0) {
-            const newTab = createNewTab();
-            setTabs([newTab]);
-            setActiveTabId(newTab.id);
-            return;
-        }
-        if (activeTabId === tabId) {
-            const closingTabIndex = tabs.findIndex(t => t.id === tabId);
-            const newActiveIndex = Math.max(0, closingTabIndex - 1);
-            setActiveTabId(newTabs[newActiveIndex].id);
-        }
-        setTabs(newTabs);
-    };
-
-    const goBack = () => {
-        if (activeTab.currentIndex > 0) {
-            updateTab(activeTabId, { currentIndex: activeTab.currentIndex - 1, isLoading: true, isBlocked: false });
-        }
-    };
-
-    const goForward = () => {
-        if (activeTab.currentIndex < activeTab.history.length - 1) {
-            updateTab(activeTabId, { currentIndex: activeTab.currentIndex + 1, isLoading: true, isBlocked: false });
-        }
-    };
-    
-    const reload = () => {
-        if (iframeRef.current) {
-            updateTab(activeTabId, { isLoading: true, isBlocked: false });
-            iframeRef.current.src = 'about:blank';
-            setTimeout(() => {
-              if (iframeRef.current) {
-                iframeRef.current.src = currentUrl;
-              }
-            }, 10);
-        }
-    };
-    
-    const handleIframeLoad = () => {
-        const frame = iframeRef.current;
-        // Use a short timeout to ensure the browser has settled security contexts
-        // after the 'load' event, which can sometimes be inconsistent immediately.
-        setTimeout(() => {
-            if (!frame || frame.src.startsWith('about:')) {
-                return;
-            }
-
-            let newTitle: string;
-            let isBlocked = false;
-            try {
-                // Accessing the contentWindow's location will throw a security error
-                // for cross-origin iframes that are blocked.
-                if (frame.contentWindow?.location.href === null) {} // No-op access to trigger error
-
-                // If we reach here, the frame is accessible.
-                newTitle = frame.contentWindow?.document.title || new URL(currentUrl).hostname;
-            } catch (e) {
-                // The frame is blocked.
-                isBlocked = true;
-                try {
-                    newTitle = new URL(currentUrl).hostname;
-                } catch {
-                    newTitle = "Invalid URL";
-                }
-            }
-            updateTab(activeTabId, { isLoading: false, title: newTitle, isBlocked });
-        }, 1);
-    };
-
-    const handleInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-        if (e.key === 'Enter') {
-            navigateTo(inputValue, activeTabId);
-        }
-    };
-    
-    const NavButton: React.FC<{ onClick: () => void; disabled: boolean; children: React.ReactNode, title: string }> = ({ onClick, disabled, children, title }) => (
-        <button onClick={onClick} disabled={disabled} title={title} className="p-1 rounded-full hover:bg-[var(--bg-tertiary)] disabled:opacity-50 disabled:hover:bg-transparent transition-colors">
-            {children}
-        </button>
-    );
-
-    const InfoIcon: React.FC<{className?: string}> = ({className}) => (
-        <svg className={className} fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd"></path></svg>
-    );
 
     return (
-        <div className="h-full flex flex-col bg-[var(--bg-secondary)] text-[var(--text-primary)]">
-            <div className="flex-shrink-0 flex items-center bg-[var(--bg-tertiary)] border-b border-[var(--border-color)]">
-                <ul className="flex flex-row overflow-x-auto">
-                    {tabs.map(tab => (
-                        <li key={tab.id}
-                            onClick={() => setActiveTabId(tab.id)}
-                            className={`flex items-center gap-2 pl-3 pr-2 py-1.5 max-w-48 border-r border-[var(--border-color)] cursor-pointer text-xs relative ${activeTabId === tab.id ? 'bg-[var(--bg-secondary)]' : 'hover:bg-[var(--bg-tertiary)]'}`}
-                        >
-                           {tab.isLoading ? (
-                               <svg className="animate-spin h-4 w-4 text-[var(--text-secondary)] flex-shrink-0" fill="none" viewBox="0 0 24 24">
-                                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                                </svg>
-                           ) : (
-                                <img src={tab.favicon || undefined} className="w-4 h-4 flex-shrink-0" alt="" onError={(e) => e.currentTarget.style.display = 'none'} />
-                           )}
-                           <span className="truncate flex-grow">{tab.title}</span>
-                           <button onClick={(e) => handleCloseTab(tab.id, e)} className="p-0.5 rounded-full hover:bg-[var(--bg-primary)] flex-shrink-0">
-                               <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M6 18L18 6M6 6l12 12" /></svg>
-                           </button>
-                        </li>
-                    ))}
-                </ul>
-                <button onClick={handleAddNewTab} title="New Tab" className="p-2 border-l border-r border-[var(--border-color)] hover:bg-[var(--bg-secondary)]">
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
-                </button>
+        <div className="h-full flex flex-col bg-transparent">
+            <div className="flex-shrink-0 p-2 border-b border-[var(--border-color)] flex gap-2">
+                <input type="text" value={url} onChange={(e) => setUrl(e.target.value)} onKeyPress={e => e.key === 'Enter' && handleGo()}
+                    className="flex-grow bg-[var(--bg-tertiary)] text-[var(--text-primary)] px-3 py-1 rounded-md border border-[var(--border-color)] focus:outline-none"/>
+                <button onClick={handleGo} className="px-3 py-1 bg-blue-600 text-white rounded-md text-sm hover:bg-blue-500">Go</button>
             </div>
-            <div className="flex items-center p-1.5 gap-2 bg-[var(--bg-tertiary)] border-b border-[var(--border-color)]">
-                <NavButton onClick={goBack} disabled={activeTab.currentIndex === 0} title="Back">
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
-                </NavButton>
-                <NavButton onClick={goForward} disabled={activeTab.currentIndex >= activeTab.history.length - 1} title="Forward">
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
-                </NavButton>
-                <NavButton onClick={reload} disabled={false} title="Reload">
-                    <svg className={`w-5 h-5 ${activeTab.isLoading ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h5M20 20v-5h-5M4 9a9 9 0 0115-3.89M20 15a9 9 0 01-15 3.89" /></svg>
-                </NavButton>
-                <div className="flex-grow relative flex items-center">
-                    <input
-                        type="text" value={inputValue} onChange={e => setInputValue(e.target.value)} onKeyDown={handleInputKeyDown} onFocus={(e) => e.target.select()}
-                        className="w-full bg-[var(--bg-primary)] rounded-full px-4 py-1.5 text-sm focus:outline-none focus:ring-2"
-                        style={{'--tw-ring-color': theme.accentColor} as React.CSSProperties}
-                        placeholder="Search Google or type a URL" />
-                    <div className="absolute right-2 flex items-center gap-2">
-                        <div className="group relative">
-                            <InfoIcon className="w-4 h-4 text-[var(--text-secondary)]" />
-                            <div className="absolute hidden group-hover:block bottom-full mb-2 right-1/2 translate-x-1/2 w-60 bg-[var(--bg-tertiary)] text-[var(--text-primary)] text-xs p-2 rounded shadow-lg border border-[var(--border-color)] z-10">
-                                Some websites may not load due to security policies. Use the "Open Externally" button to open them in a new browser tab.
-                            </div>
-                        </div>
-                        <button onClick={() => window.open(currentUrl, '_blank')} title="Open in New Tab" className="p-1 rounded-full hover:bg-[var(--bg-primary)]">
-                           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg>
-                        </button>
-                    </div>
-                </div>
-            </div>
-            <div className="flex-grow relative bg-white">
-                {activeTab.isBlocked ? (
-                    <div className="w-full h-full flex flex-col items-center justify-center p-8 bg-[var(--bg-secondary)] text-[var(--text-primary)] text-center">
-                        <svg className="w-16 h-16 text-red-500 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"></path></svg>
-                        <h2 className="text-2xl font-bold mb-2">This page won't load</h2>
-                        <p className="max-w-md mb-6 text-[var(--text-secondary)]">
-                            <span className="font-semibold truncate block">{(()=>{ try { return new URL(currentUrl).hostname } catch { return 'This website'}})()}</span> has security settings that prevent it from being displayed here.
-                        </p>
-                        <button 
-                            onClick={() => window.open(currentUrl, '_blank')} 
-                            className="px-6 py-2 rounded-lg text-white font-semibold transition-opacity hover:opacity-90 flex items-center gap-2"
-                            style={{ backgroundColor: theme.accentColor }}
-                        >
-                           <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg>
-                            Open in New Tab
-                        </button>
-                    </div>
-                ) : (
-                    <iframe
-                        ref={iframeRef}
-                        key={activeTab.id}
-                        src={currentUrl}
-                        onLoad={handleIframeLoad}
-                        className={`w-full h-full border-0 bg-white transition-opacity duration-300 ${activeTab.isLoading ? 'opacity-0' : 'opacity-100'}`}
-                        title="Browser"
-                        sandbox="allow-forms allow-modals allow-pointer-lock allow-popups allow-popups-to-escape-sandbox allow-same-origin allow-scripts"
-                    />
-                )}
-                 {activeTab.isLoading && (
-                    <div className="absolute inset-0 flex items-center justify-center bg-white pointer-events-none">
-                        <svg className="animate-spin h-8 w-8" style={{ color: theme.accentColor }} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                        </svg>
-                    </div>
-                )}
-            </div>
+            <iframe src={iframeSrc} className="w-full h-full border-none" sandbox="allow-scripts allow-same-origin allow-forms" />
         </div>
     );
 };
 
-
 // --- Notes ---
 export const Notes: React.FC = () => {
-    const { fileSystem } = useContext(AppContext)!;
+    const { fsDispatch, fileSystem } = useContext(AppContext)!;
+    const notesFile = useMemo(() => {
+        let file = null;
+        const docs = fileSystem.children?.find(c => c.id === 'documents');
+        if (docs?.children) {
+            file = docs.children.find(c => c.id === 'notes-file');
+        }
+        return file;
+    }, [fileSystem]);
     
-    const documents = fileSystem.children?.find(c => c.id === 'documents');
-    const notesFile = documents?.children?.find(c => c.name === 'notes.txt');
+    const [content, setContent] = useState(notesFile?.content || '');
 
-    if (!notesFile) {
-        return (
-             <div className="w-full h-full bg-[var(--bg-secondary)] text-[var(--text-secondary)] flex items-center justify-center p-2 text-center">
-                <p>Could not find notes.txt in your Documents folder.</p>
-            </div>
-        );
-    }
-    return <TextEditor file={notesFile} />;
+    useEffect(() => {
+        const timeoutId = setTimeout(() => {
+            if (notesFile && content !== notesFile.content) {
+                fsDispatch({
+                    type: 'UPDATE_NODE',
+                    payload: { nodeId: notesFile.id, updates: { content, size: new Blob([content]).size } }
+                });
+            }
+        }, 500); // Debounce saving
+        return () => clearTimeout(timeoutId);
+    }, [content, notesFile, fsDispatch]);
+
+    return (
+        <textarea
+            value={content}
+            onChange={(e) => setContent(e.target.value)}
+            className="w-full h-full bg-yellow-100 text-gray-800 p-4 resize-none focus:outline-none text-lg leading-loose"
+            placeholder="Your notes are saved automatically..."
+        />
+    );
 };
 
-// --- MediaViewer ---
-export const MediaViewer: React.FC<{ file?: FileSystemNode }> = ({ file }) => {
-    if (!file) {
-        return (
-            <div className="h-full w-full bg-black flex items-center justify-center p-4 text-gray-400">
-                <p>No image selected. Open an image from the File Explorer.</p>
-            </div>
-        );
-    }
+// --- Media Viewer ---
+export const MediaViewer: React.FC<{ file: FileSystemNode }> = ({ file }) => {
     return (
-        <div className="h-full w-full bg-black flex items-center justify-center p-4">
+        <div className="h-full w-full flex items-center justify-center bg-black p-4">
             <img src={file.content} alt={file.name} className="max-w-full max-h-full object-contain" />
         </div>
     );
 };
 
 // --- Properties Viewer ---
-export const PropertiesViewer: React.FC<{ file?: FileSystemNode }> = ({ file }) => {
-    if (!file) {
-        return (
-            <div className="p-4 text-[var(--text-secondary)] bg-transparent h-full flex items-center justify-center text-center">
-                <p>Right-click a file and select "Properties" to view details.</p>
-            </div>
-        );
-    }
-    
-    const formatBytes = (bytes: number, decimals = 2) => {
-        if (!+bytes) return '0 Bytes'
-        const k = 1024;
-        const dm = decimals < 0 ? 0 : decimals;
-        const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
-        const i = Math.floor(Math.log(bytes) / Math.log(k));
-        return `${parseFloat((bytes / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`;
-    }
-
-    const getFileTypeDescription = (node: FileSystemNode): string => {
-        if (node.type === 'folder') return 'Folder';
-        if (node.name.endsWith('.zip') || node.mimeType === 'application/zip') return 'ZIP Archive';
-        if (node.mimeType) {
-            if (node.mimeType.startsWith('image/')) return `Image File (${node.mimeType.split('/')[1].toUpperCase()})`;
-            if (node.mimeType === 'text/plain') return 'Text Document';
-            return node.mimeType;
-        }
-        const extension = node.name.split('.').pop()?.toLowerCase();
-        switch (extension) {
-            case 'txt': return 'Text Document';
-            case 'md': return 'Markdown Document';
-            case 'jpg':
-            case 'jpeg': return 'JPEG Image';
-            case 'png': return 'PNG Image';
-            default: return 'File';
-        }
-    };
-
+export const PropertiesViewer: React.FC<{ file: FileSystemNode }> = ({ file }) => {
+    const properties = [
+        { name: 'Name', value: file.name },
+        { name: 'Type', value: file.type === 'folder' ? 'Folder' : (file.mimeType || 'File') },
+        { name: 'Size', value: file.size ? `${(file.size / 1024).toFixed(2)} KB (${file.size} bytes)` : 'N/A' },
+        { name: 'Created', value: file.createdAt ? new Date(file.createdAt).toLocaleString() : 'N/A' },
+        { name: 'ID', value: file.id },
+    ];
     return (
-        <div className="p-4 text-[var(--text-primary)] bg-transparent h-full text-sm">
-            <h2 className="text-lg font-bold mb-4 border-b border-[var(--border-color)] pb-2 flex items-center gap-2">
-                {file.type === 'folder' ? <FolderIcon className="w-5 h-5 text-yellow-500" /> : <FileTextIcon className="w-5 h-5 text-gray-400" />}
-                <span className="truncate">{file.name}</span>
-            </h2>
-            <div className="space-y-2">
-                <div className="flex justify-between">
-                    <span className="font-semibold text-[var(--text-secondary)]">Type:</span>
-                    <span>{getFileTypeDescription(file)}</span>
-                </div>
-                {file.type === 'file' && (
-                    <div className="flex justify-between">
-                        <span className="font-semibold text-[var(--text-secondary)]">Size:</span>
-                        <span>{formatBytes(file.size || 0)}</span>
-                    </div>
-                )}
-                 {file.type === 'folder' && file.children && (
-                    <div className="flex justify-between">
-                        <span className="font-semibold text-[var(--text-secondary)]">Contains:</span>
-                        <span>{file.children.length} items</span>
-                    </div>
-                )}
-                <div className="flex justify-between">
-                    <span className="font-semibold text-[var(--text-secondary)]">Created:</span>
-                    <span className='text-right'>{file.createdAt ? new Date(file.createdAt).toLocaleString() : 'N/A'}</span>
-                </div>
-            </div>
+        <div className="p-4 text-sm text-[var(--text-primary)]">
+            <h3 className="font-bold text-lg mb-4">{file.name}</h3>
+            <table className="w-full">
+                <tbody>
+                    {properties.map(prop => (
+                        <tr key={prop.name} className="border-b border-[var(--border-color)]">
+                            <td className="py-2 pr-2 font-semibold">{prop.name}</td>
+                            <td className="py-2 break-all">{prop.value}</td>
+                        </tr>
+                    ))}
+                </tbody>
+            </table>
         </div>
     );
 };

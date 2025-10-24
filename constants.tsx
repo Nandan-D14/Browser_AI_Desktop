@@ -77,6 +77,26 @@ export const ListViewIcon = ({ className }: { className?: string }) => (
 export const GridViewIcon = ({ className }: { className?: string }) => (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
 );
+export const PreviewIcon = ({ className }: { className?: string }) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+        <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+        <line x1="9" y1="3" x2="9" y2="21"></line>
+    </svg>
+);
+export const DownloadsIcon = ({ className }: { className?: string }) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+        <polyline points="7 10 12 15 17 10"></polyline>
+        <line x1="12" y1="15" x2="12" y2="3"></line>
+    </svg>
+);
+export const GoogleDriveIcon = ({ className }: { className?: string }) => (
+    <svg viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg" className={className}>
+        <path d="M34.4,26.6l6.8-11.8L34.4,3l-6.8,11.8L34.4,26.6z" fill="#ffc107"/>
+        <path d="M10.8,3L4,14.8l10.2,10.2l6.8-11.8L10.8,3z" fill="#03a9f4"/>
+        <path d="M21,45l-6.8-11.8L24.4,23l10.2,10.2L21,45z" fill="#4caf50"/>
+    </svg>
+);
 
 
 // --- App Definitions ---
@@ -127,6 +147,13 @@ export const initialFileSystem: FileSystemNode = {
       ],
     },
     {
+        id: 'downloads',
+        name: 'Downloads',
+        type: 'folder',
+        createdAt: new Date('2023-01-01T10:03:00Z').toISOString(),
+        children: [],
+    },
+    {
         id: 'pictures',
         name: 'Pictures',
         type: 'folder',
@@ -147,7 +174,32 @@ export const initialFileSystem: FileSystemNode = {
       id: 'readme',
       name: 'README.md',
       type: 'file',
-      content: '# Welcome to WarmWind OS!\n\nThis is a virtual operating system running in your browser, powered by React and AI.\n\n## Keyboard Shortcuts\n\n- **Alt + F4**: Close the active window\n- **Ctrl + Alt + A**: Open AI Assistant\n- **Ctrl + Alt + E**: Open File Explorer',
+      content: `# Welcome to WarmWind OS!
+
+This is a virtual operating system running in your browser, powered by React and AI.
+
+## Keyboard Shortcuts
+
+- **Alt + F4**: Close the active window
+- **Ctrl + Alt + A**: Open AI Assistant
+- **Ctrl + Alt + E**: Open File Explorer
+
+## Google Drive Integration Setup
+
+To use the Google Drive file import feature, you need to configure Google Cloud credentials:
+
+1.  **Create a Google Cloud Project**: Go to the [Google Cloud Console](https://console.cloud.google.com/) and create a new project.
+2.  **Enable APIs**: In your new project, enable the "Google Drive API" and the "Google Picker API".
+3.  **Create OAuth 2.0 Client ID**:
+    - Go to "APIs & Services" > "Credentials".
+    - Click "Create Credentials" and select "OAuth client ID".
+    - Choose "Web application" as the application type.
+    - Add your application's URL to the "Authorized JavaScript origins".
+    - Add the same URL to the "Authorized redirect URIs".
+4.  **Configure Environment Variable**:
+    - Copy the generated "Client ID".
+    - In your development environment, create a variable named \`GOOGLE_CLIENT_ID\` and paste your Client ID as the value.
+`,
       createdAt: new Date('2023-01-01T09:05:00Z').toISOString(),
       size: 273,
       mimeType: 'text/markdown',
