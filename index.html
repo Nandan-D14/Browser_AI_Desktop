@@ -1,0 +1,58 @@
+
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>WarmWind OS - AI Virtual PC</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+      :root {
+        --font-family: 'system-ui', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+        --accent-color: #3b82f6; /* Default blue */
+      }
+      .light {
+        --bg-primary: #f3f4f6;
+        --bg-secondary: #e5e7eb;
+        --bg-tertiary: #d1d5db;
+        --text-primary: #111827;
+        --text-secondary: #4b5563;
+        --border-color: rgba(0, 0, 0, 0.1);
+        --window-bg: rgba(255, 255, 255, 0.5);
+        --window-content-bg: rgba(243, 244, 246, 0.7);
+        --topbar-bg: rgba(255, 255, 255, 0.3);
+      }
+      .dark {
+        --bg-primary: #111827;
+        --bg-secondary: #1f2937;
+        --bg-tertiary: #374151;
+        --text-primary: #f9fafb;
+        --text-secondary: #d1d5db;
+        --border-color: rgba(255, 255, 255, 0.15);
+        --window-bg: rgba(0, 0, 0, 0.2);
+        --window-content-bg: rgba(17, 24, 39, 0.6);
+        --topbar-bg: rgba(0, 0, 0, 0.2);
+      }
+      body {
+        font-family: var(--font-family);
+        background-color: var(--bg-primary);
+        color: var(--text-primary);
+      }
+    </style>
+  <script type="importmap">
+{
+  "imports": {
+    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.27.0",
+    "react/": "https://aistudiocdn.com/react@^19.2.0/",
+    "react": "https://aistudiocdn.com/react@^19.2.0",
+    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/"
+  }
+}
+</script>
+</head>
+  <body class="overflow-hidden">
+    <div id="root"></div>
+    <script type="module" src="/index.tsx"></script>
+  </body>
+</html>

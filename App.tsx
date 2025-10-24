@@ -1,0 +1,832 @@
+import React, { useState, useCallback, useMemo, createContext, useReducer, useRef, useEffect, useContext } from 'react';
+import { AppContextType, AppDefinition, AppId, WindowInstance, FileSystemNode, FileSystemAction, Theme, Notification } from './types';
+import { APP_DEFINITIONS, StartIcon, initialFileSystem, FolderIcon, FileTextIcon, ImageIcon, BellIcon } from './constants';
+import WindowComponent from './components/Window';
+import { AppRenderer, ContextMenu } from './components/Applications';
+
+// --- File System Logic ---
+const traverseAndModify = (node: FileSystemNode, action: FileSystemAction): FileSystemNode => {
+    if (action.type === 'EMPTY_TRASH' && node.id === 'trash') {
+        return { ...node, children: [] };
+    }
+    // This function creates a new tree with the modifications, ensuring immutability.
+    let children = node.children;
+    if (children) {
+        if (action.type === 'ADD_NODE' && action.payload.parentId === node.id) {
+            // Add node
+            children = [...children, action.payload.node];
+        } else if (action.type === 'DELETE_NODE' && action.payload.parentId === node.id) {
+            // Delete node
+            children = children.filter(child => child.id !== action.payload.nodeId);
+        } else {
+            // Recurse
+            children = children.map(child => {
+                 if (action.type === 'UPDATE_NODE' && action.payload.nodeId === child.id) {
+                    return { ...child, ...action.payload.updates };
+                 }
+                 return traverseAndModify(child, action);
+            });
+        }
+    }
+    return { ...node, children };
+};
+
+
+const fileSystemReducer = (state: FileSystemNode, action: FileSystemAction): FileSystemNode => {
+    if (action.type === 'UPDATE_NODE' && action.payload.nodeId === state.id) {
+        return { ...state, ...action.payload.updates };
+    }
+    return traverseAndModify(state, action);
+};
+
+// --- Context ---
+export const AppContext = createContext<AppContextType | null>(null);
+
+// --- Helper Components ---
+const Desktop: React.FC = () => {
+    const { openApp, theme } = React.useContext(AppContext)!;
+    return (
+        <div className="absolute inset-0 p-4 pt-10">
+            <div className="flex flex-col items-start space-y-4">
+            {APP_DEFINITIONS.filter(app => app.isDefault).map(app => (
+                 <div key={app.id} onDoubleClick={() => openApp(app.id)} className="flex flex-col items-center space-y-1 text-center w-20 cursor-pointer p-2 rounded hover:bg-white/10">
+                    <app.icon className="w-12 h-12 drop-shadow-lg" />
+                    <span className="text-xs shadow-black/50" style={{ color: theme.mode === 'dark' ? '#fff' : '#111', textShadow: theme.mode === 'dark' ? '1px 1px 2px black' : 'none' }}>{app.name}</span>
+                 </div>
+            ))}
+            </div>
+        </div>
+    );
+};
+
+const NotificationPanel: React.FC<{ onClose: () => void }> = ({ onClose }) => {
+    const { notifications, clearAllNotifications, getAppDefinition } = useContext(AppContext)!;
+    const panelRef = useRef<HTMLDivElement>(null);
+
+    useEffect(() => {
+        const handleClickOutside = (event: MouseEvent) => {
+            if (panelRef.current && !panelRef.current.contains(event.target as Node)) {
+                onClose();
+            }
+        };
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, [onClose]);
+
+    return (
+        <div ref={panelRef} className="absolute top-full right-0 mt-1 w-80 bg-[var(--bg-secondary)] backdrop-blur-xl rounded-lg shadow-lg border border-[var(--border-color)] text-sm flex flex-col max-h-[32rem]">
+            <div className="flex justify-between items-center p-3 border-b border-[var(--border-color)]">
+                <h3 className="font-semibold text-[var(--text-primary)]">Notifications</h3>
+                {notifications.length > 0 && (
+                    <button onClick={clearAllNotifications} className="text-xs text-blue-500 hover:underline">Clear All</button>
+                )}
+            </div>
+            {notifications.length > 0 ? (
+                <ul className="flex-grow overflow-y-auto p-2">
+                    {notifications.map(n => {
+                        const AppIcon = getAppDefinition(n.appId)?.icon || 'div';
+                        return (
+                            <li key={n.id} className="p-2 rounded-md hover:bg-[var(--bg-tertiary)]">
+                                <div className="flex items-start gap-3">
+                                    <AppIcon className="w-6 h-6 flex-shrink-0 mt-1" />
+                                    <div className="flex-grow">
+                                        <p className="font-semibold text-[var(--text-primary)]">{n.title}</p>
+                                        <p className="text-xs text-[var(--text-secondary)]">{n.message}</p>
+                                        <p className="text-xs text-[var(--text-secondary)] mt-1 opacity-70">{new Date(n.timestamp).toLocaleString()}</p>
+                                    </div>
+                                </div>
+                            </li>
+                        );
+                    })}
+                </ul>
+            ) : (
+                <div className="flex-grow flex items-center justify-center p-8 text-[var(--text-secondary)]">
+                    <p>No new notifications</p>
+                </div>
+            )}
+        </div>
+    );
+};
+
+
+const TopMenuBar: React.FC = () => {
+    const { windows, getAppDefinition, activeWindowId, openApp, fileSystem, dockedApps, setDockedApps, theme, notifications, markNotificationsAsRead } = useContext(AppContext)!;
+    const [time, setTime] = useState(new Date());
+    const [isMenuOpen, setIsMenuOpen] = useState(false);
+    const [isNotificationPanelOpen, setIsNotificationPanelOpen] = useState(false);
+    const [searchQuery, setSearchQuery] = useState('');
+    const [menuContextMenu, setMenuContextMenu] = useState<{x: number, y: number, app: AppDefinition} | null>(null);
+    const menuRef = useRef<HTMLDivElement>(null);
+
+    const activeWindow = windows.find(w => w.id === activeWindowId);
+    const activeAppDef = activeWindow ? getAppDefinition(activeWindow.appId) : null;
+    const activeAppName = activeAppDef ? activeAppDef.name : "Desktop";
+    
+    const unreadCount = useMemo(() => notifications.filter(n => !n.read).length, [notifications]);
+    
+    type SearchResultFile = FileSystemNode & { path: string };
+    const [searchResults, setSearchResults] = useState<{
+        apps: AppDefinition[];
+        files: SearchResultFile[];
+    }>({ apps: [], files: [] });
+
+    useEffect(() => {
+        const timer = setInterval(() => setTime(new Date()), 1000 * 30);
+        return () => clearInterval(timer);
+    }, []);
+
+    useEffect(() => {
+        if (!searchQuery.trim()) {
+            setSearchResults({ apps: [], files: [] });
+            return;
+        }
+        const query = searchQuery.toLowerCase();
+
+        const filteredApps = APP_DEFINITIONS.filter(app =>
+            app.name.toLowerCase().includes(query)
+        );
+
+        const filteredFiles: SearchResultFile[] = [];
+        const searchFileSystem = (node: FileSystemNode, path: string) => {
+            if (node.name.toLowerCase().includes(query) && node.id !== 'root') {
+                filteredFiles.push({ ...node, path });
+            }
+            if (node.type === 'folder' && node.children) {
+                node.children.forEach(child => {
+                    searchFileSystem(child, `${path}/${child.name}`);
+                });
+            }
+        };
+        fileSystem.children?.forEach(child => searchFileSystem(child, `~/${child.name}`));
+        setSearchResults({ apps: filteredApps, files: filteredFiles });
+    }, [searchQuery, fileSystem]);
+
+    useEffect(() => {
+        const handleClickOutside = (event: MouseEvent) => {
+            if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+                setIsMenuOpen(false);
+                setSearchQuery('');
+            }
+        };
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, []);
+    
+    const handleAboutClick = () => {
+        const readmeFile = fileSystem.children?.find(c => c.id === 'readme');
+        if (readmeFile) {
+            openApp('text_editor', { file: readmeFile, title: "About This OS" });
+        }
+        setIsMenuOpen(false);
+        setSearchQuery('');
+    };
+
+    const handleMenuToggle = () => {
+        const wasOpen = isMenuOpen;
+        setIsMenuOpen(!wasOpen);
+        if (wasOpen) {
+            setSearchQuery('');
+        }
+    };
+
+    const handlePinToggle = (appId: AppId) => {
+        setDockedApps(prev => {
+            if (prev.includes(appId)) {
+                return prev.filter(id => id !== appId);
+            } else {
+                return [...prev, appId];
+            }
+        });
+        setMenuContextMenu(null);
+    };
+
+    const handleFileClick = (file: SearchResultFile) => {
+        if (file.type === 'folder') {
+            openApp('file_explorer');
+        } else if (file.mimeType?.startsWith('image/')) {
+            openApp('media_viewer', { file });
+        } else {
+            openApp('text_editor', { file });
+        }
+        handleMenuToggle();
+    };
+
+
+    const menuContextItems = menuContextMenu ? [
+        { 
+            label: dockedApps.includes(menuContextMenu.app.id) ? 'Unpin from Taskbar' : 'Pin to Taskbar', 
+            action: () => handlePinToggle(menuContextMenu.app.id)
+        },
+        { label: 'Open', action: () => openApp(menuContextMenu.app.id) }
+    ] : [];
+
+    const accentHoverStyle = {
+        '--hover-color': theme.accentColor
+    };
+    
+    const handleNotificationToggle = () => {
+        if (!isNotificationPanelOpen) {
+            markNotificationsAsRead();
+        }
+        setIsNotificationPanelOpen(prev => !prev);
+    };
+
+    return (
+        <div className="absolute top-0 left-0 right-0 h-7 bg-[var(--topbar-bg)] backdrop-blur-3xl flex items-center px-4 z-[100000] justify-between text-[var(--text-primary)] text-sm font-semibold border-b border-[var(--border-color)]">
+            <div className="flex items-center gap-4">
+                <div className="relative" ref={menuRef}>
+                    <button onClick={handleMenuToggle}>
+                        <StartIcon className="w-5 h-5" style={{ stroke: 'var(--text-primary)'}} />
+                    </button>
+                    {isMenuOpen && (
+                        <div className="absolute top-full left-0 mt-1 w-80 bg-[var(--bg-secondary)] backdrop-blur-xl rounded-lg shadow-lg border border-[var(--border-color)] text-sm" onClick={() => setMenuContextMenu(null)}>
+                           <div className="p-2 border-b border-[var(--border-color)]">
+                                <input
+                                    type="text"
+                                    placeholder="Type to search..."
+                                    className="w-full bg-[var(--bg-tertiary)] text-[var(--text-primary)] placeholder-[var(--text-secondary)] px-2 py-1.5 rounded-md border border-[var(--border-color)] focus:outline-none focus:ring-1"
+                                    style={{'--tw-ring-color': theme.accentColor} as React.CSSProperties}
+                                    value={searchQuery}
+                                    onChange={(e) => setSearchQuery(e.target.value)}
+                                    autoFocus
+                                />
+                           </div>
+                           <ul className="py-1 max-h-[28rem] overflow-y-auto text-[var(--text-primary)]">
+                                {!searchQuery.trim() ? (
+                                    <>
+                                        {APP_DEFINITIONS.map(app => (
+                                            <li 
+                                                key={app.id}
+                                                onClick={() => { openApp(app.id); handleMenuToggle(); }} 
+                                                onContextMenu={(e) => { e.preventDefault(); setMenuContextMenu({ x: e.clientX, y: e.clientY, app })}}
+                                                className="px-3 py-2 hover:bg-[var(--hover-color)] cursor-pointer flex items-center gap-3"
+                                                style={accentHoverStyle}
+                                            >
+                                                <app.icon className="w-6 h-6 flex-shrink-0" />
+                                                <span>{app.name}</span>
+                                            </li>
+                                        ))}
+                                        <li className='border-t border-[var(--border-color)] mt-1 pt-1'>
+                                            <div onClick={handleAboutClick} style={accentHoverStyle} className="px-3 py-2 hover:bg-[var(--hover-color)] cursor-pointer flex items-center gap-3">About This OS</div>
+                                        </li>
+                                    </>
+                                ) : (
+                                    <>
+                                        {searchResults.apps.length > 0 && (
+                                            <>
+                                                <li className="px-3 pt-2 pb-1 text-xs font-bold text-[var(--text-secondary)] opacity-70">Applications</li>
+                                                {searchResults.apps.map(app => (
+                                                    <li 
+                                                        key={app.id}
+                                                        onClick={() => { openApp(app.id); handleMenuToggle(); }} 
+                                                        className="px-3 py-2 hover:bg-[var(--hover-color)] cursor-pointer flex items-center gap-3"
+                                                        style={accentHoverStyle}
+                                                    >
+                                                        <app.icon className="w-6 h-6 flex-shrink-0" />
+                                                        <span>{app.name}</span>
+                                                    </li>
+                                                ))}
+                                            </>
+                                        )}
+                                        {searchResults.files.length > 0 && (
+                                            <>
+                                                <li className="px-3 pt-2 pb-1 text-xs font-bold text-[var(--text-secondary)] opacity-70">Files & Folders</li>
+                                                {searchResults.files.map(file => (
+                                                    <li 
+                                                        key={file.id}
+                                                        onClick={() => handleFileClick(file)}
+                                                        className="px-3 py-2 hover:bg-[var(--hover-color)] cursor-pointer flex items-center gap-3"
+                                                        style={accentHoverStyle}
+                                                    >
+                                                        {file.type === 'folder' 
+                                                            ? <FolderIcon className="w-6 h-6 flex-shrink-0" /> 
+                                                            : file.mimeType?.startsWith('image/')
+                                                                ? <ImageIcon className="w-6 h-6 flex-shrink-0" />
+                                                                : <FileTextIcon className="w-6 h-6 flex-shrink-0" />
+                                                        }
+                                                        <div className="flex flex-col overflow-hidden">
+                                                            <span className="truncate">{file.name}</span>
+                                                            <span className="text-xs truncate opacity-60">{file.path}</span>
+                                                        </div>
+                                                    </li>
+                                                ))}
+                                            </>
+                                        )}
+                                        {searchResults.apps.length === 0 && searchResults.files.length === 0 && (
+                                            <li className="px-3 py-2 text-[var(--text-secondary)] text-center">No results for "{searchQuery}"</li>
+                                        )}
+                                    </>
+                                )}
+                           </ul>
+                        </div>
+                    )}
+                </div>
+                <div>{activeAppName}</div>
+            </div>
+            <div className="flex items-center gap-4">
+                 <div>{time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
+                 <div className="relative">
+                    <button onClick={handleNotificationToggle} className="relative">
+                        <BellIcon className="w-5 h-5" />
+                        {unreadCount > 0 && (
+                             <span className="absolute top-0 right-0 block h-2 w-2 transform translate-x-1/2 -translate-y-1/2 rounded-full bg-red-500 ring-1 ring-[var(--topbar-bg)]"></span>
+                        )}
+                    </button>
+                    {isNotificationPanelOpen && <NotificationPanel onClose={() => setIsNotificationPanelOpen(false)} />}
+                 </div>
+            </div>
+            {menuContextMenu && <ContextMenu x={menuContextMenu.x} y={menuContextMenu.y} items={menuContextItems} onClose={() => setMenuContextMenu(null)} />}
+        </div>
+    )
+};
+
+const Taskbar: React.FC = () => {
+    const { 
+        openApp, 
+        aiPromptHandler, 
+        aiVoiceHandler, 
+        isAiListening, 
+        theme, 
+        dockedApps, 
+        getAppDefinition, 
+        windows, 
+        focusApp, 
+        setDockedApps 
+    } = useContext(AppContext)!;
+    const [input, setInput] = useState('');
+    const [dockContextMenu, setDockContextMenu] = useState<{ x: number, y: number, appId: AppId } | null>(null);
+
+    const handleSubmit = () => {
+        if (!input.trim()) return;
+        openApp('ai_assistant');
+        setTimeout(() => {
+            aiPromptHandler.current?.(input);
+            setInput('');
+        }, 0);
+    };
+
+    const handleVoiceClick = () => {
+        openApp('ai_assistant');
+        setTimeout(() => {
+            aiVoiceHandler.current?.();
+        }, 0);
+    };
+    
+    const handleIconContextMenu = (e: React.MouseEvent, appId: AppId) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setDockContextMenu({ x: e.clientX, y: e.clientY, appId });
+    };
+
+    const dockContextItems = useMemo(() => {
+        if (!dockContextMenu) return [];
+        return [
+            { label: 'Open', action: () => { openApp(dockContextMenu.appId); setDockContextMenu(null); } },
+            { 
+                label: 'Unpin from Taskbar', 
+                action: () => {
+                    setDockedApps(prev => prev.filter(id => id !== dockContextMenu.appId));
+                    setDockContextMenu(null);
+                }
+            }
+        ];
+    }, [dockContextMenu, openApp, setDockedApps]);
+
+
+    return (
+        <>
+            <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-[100000]">
+                <div 
+                    className="flex items-center bg-black/25 backdrop-blur-2xl p-2 rounded-full border border-white/20 shadow-2xl shadow-black/50 transition-all duration-300 ease-in-out focus-within:shadow-lg focus-within:shadow-blue-500/50 focus-within:border-white/30"
+                    onClick={() => setDockContextMenu(null)}
+                >
+                    {dockedApps.map(appId => {
+                        const appDef = getAppDefinition(appId);
+                        if (!appDef) return null;
+                        
+                        const isRunning = windows.some(w => w.appId === appId);
+                        
+                        const handleIconClick = () => {
+                            const runningWindows = windows.filter(w => w.appId === appId);
+                            if (runningWindows.length > 0) {
+                                focusApp(runningWindows[0].id);
+                            } else {
+                                openApp(appId);
+                            }
+                        };
+
+                        return (
+                            <div key={appId} className="relative group px-1">
+                                <button 
+                                    onClick={handleIconClick} 
+                                    onContextMenu={(e) => handleIconContextMenu(e, appId)}
+                                    title={appDef.name} 
+                                    className="p-2 rounded-full hover:bg-white/20 transition-all transform group-hover:scale-110"
+                                >
+                                    <appDef.icon className="w-8 h-8" />
+                                </button>
+                                {isRunning && <div className="absolute bottom-1 left-1/2 -translate-x-1/2 w-1.5 h-1.5 bg-white rounded-full"></div>}
+                            </div>
+                        )
+                    })}
+                    
+                    {dockedApps.length > 0 && <div className="w-px h-10 bg-white/20 mx-2" />}
+                    
+                    <button
+                        onClick={handleVoiceClick}
+                        className={`relative flex-shrink-0 p-2 rounded-full transition-colors duration-200 text-white ${isAiListening ? 'bg-red-600' : 'bg-green-600 hover:bg-green-500'}`}
+                        title="Start voice conversation"
+                    >
+                        {isAiListening && <span className="absolute inset-0 bg-red-500 rounded-full animate-ping"></span>}
+                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" x2="12" y1="19" y2="22"></line></svg>
+                    </button>
+                    <input
+                        type="text"
+                        value={input}
+                        onChange={(e) => setInput(e.target.value)}
+                        onKeyPress={(e) => e.key === 'Enter' && handleSubmit()}
+                        className="flex-grow bg-transparent border-none text-white px-4 text-sm focus:outline-none placeholder-gray-400 min-w-[20rem]"
+                        placeholder={isAiListening ? "Listening..." : "Ask AI anything..."}
+                        disabled={isAiListening}
+                    />
+                    <button
+                        onClick={handleSubmit}
+                        disabled={isAiListening || !input.trim()}
+                        style={{ backgroundColor: isAiListening || !input.trim() ? '' : theme.accentColor }}
+                        className="flex-shrink-0 p-2 rounded-full hover:opacity-90 disabled:bg-gray-600 disabled:cursor-not-allowed text-white transition-colors duration-200"
+                        title="Send message"
+                    >
+                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+                    </button>
+                </div>
+            </div>
+            {dockContextMenu && <ContextMenu x={dockContextMenu.x} y={dockContextMenu.y} items={dockContextItems} onClose={() => setDockContextMenu(null)} />}
+        </>
+    );
+};
+
+const NotificationToasts: React.FC = () => {
+    const { notifications, getAppDefinition } = useContext(AppContext)!;
+    const [visibleToasts, setVisibleToasts] = useState<Notification[]>([]);
+    const displayedIds = useRef(new Set<string>());
+
+    useEffect(() => {
+        const newNotifications = notifications.filter(n => !displayedIds.current.has(n.id));
+
+        if (newNotifications.length > 0) {
+            newNotifications.forEach(n => displayedIds.current.add(n.id));
+            setVisibleToasts(prev => [...prev, ...newNotifications]);
+
+            newNotifications.forEach(n => {
+                setTimeout(() => {
+                    setVisibleToasts(current => current.filter(toast => toast.id !== n.id));
+                }, 5000);
+            });
+        }
+    }, [notifications]);
+    
+    const removeToast = (id: string) => {
+        setVisibleToasts(current => current.filter(toast => toast.id !== id));
+    };
+
+    return (
+        <div className="fixed bottom-4 right-4 z-[200000] w-80 space-y-2">
+            {visibleToasts.map(toast => {
+                const AppIcon = getAppDefinition(toast.appId)?.icon || 'div';
+                return (
+                    <div key={toast.id} className="bg-[var(--bg-secondary)] backdrop-blur-xl rounded-lg shadow-lg border border-[var(--border-color)] p-3 animate-toast-in">
+                        <div className="flex items-start gap-3">
+                            <AppIcon className="w-6 h-6 flex-shrink-0 mt-1" />
+                            <div className="flex-grow">
+                                <p className="font-semibold text-sm text-[var(--text-primary)]">{toast.title}</p>
+                                <p className="text-xs text-[var(--text-secondary)]">{toast.message}</p>
+                            </div>
+                            <button onClick={() => removeToast(toast.id)} className="p-1 rounded-full hover:bg-[var(--bg-tertiary)] -mt-1 -mr-1">
+                                <svg className="w-4 h-4 text-[var(--text-secondary)]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                            </button>
+                        </div>
+                    </div>
+                );
+            })}
+             <style>{`
+                @keyframes toast-in {
+                    from { opacity: 0; transform: translateX(100%); }
+                    to { opacity: 1; transform: translateX(0); }
+                }
+                .animate-toast-in { animation: toast-in 0.3s ease-out forwards; }
+            `}</style>
+        </div>
+    );
+};
+
+
+// --- Main App Component ---
+const App: React.FC = () => {
+    // --- State Initialization with Persistence ---
+    const [fileSystem, fsDispatch] = useReducer(fileSystemReducer, initialFileSystem, (initial) => {
+        try {
+            const saved = localStorage.getItem('warmwind_os_fs');
+            return saved ? JSON.parse(saved) : initial;
+        } catch (e) {
+            console.error("Failed to load filesystem state:", e);
+            return initial;
+        }
+    });
+
+    const [windows, setWindows] = useState<WindowInstance[]>(() => {
+        try {
+            const saved = localStorage.getItem('warmwind_os_windows');
+            return saved ? JSON.parse(saved) : [];
+        } catch (e) {
+            console.error("Failed to load windows state:", e);
+            return [];
+        }
+    });
+    
+    const [theme, setTheme] = useState<Theme>(() => {
+        try {
+            const savedTheme = localStorage.getItem('warmwind_os_theme');
+            return savedTheme ? JSON.parse(savedTheme) : {
+                mode: 'dark',
+                accentColor: '#3b82f6',
+                fontFamily: 'system-ui, sans-serif',
+            };
+        } catch (e) {
+            console.error("Failed to load theme state:", e);
+            return {
+                mode: 'dark',
+                accentColor: '#3b82f6',
+                fontFamily: 'system-ui, sans-serif',
+            };
+        }
+    });
+
+
+    const [activeWindowId, setActiveWindowId] = useState<string | null>(null); // Active window is transient on reload
+    
+    const [notifications, setNotifications] = useState<Notification[]>([]);
+
+    const [nextZIndex, setNextZIndex] = useState<number>(() => {
+        try {
+            const savedWindowsRaw = localStorage.getItem('warmwind_os_windows');
+            if (savedWindowsRaw) {
+                const savedWindows: WindowInstance[] = JSON.parse(savedWindowsRaw);
+                if (savedWindows.length > 0) {
+                    return Math.max(...savedWindows.map(w => w.zIndex)) + 1;
+                }
+            }
+        } catch (e) {
+            console.error("Failed to calculate initial z-index from stored windows:", e);
+        }
+        return 10;
+    });
+    
+    const [wallpaper, setWallpaper] = useState(() => {
+        try {
+            const savedWallpaper = localStorage.getItem('warmwind_os_wallpaper');
+            return savedWallpaper || 'https://images.unsplash.com/photo-1451187580459-43490279c0fa?q=80&w=2072&auto=format&fit=crop';
+        } catch (error) {
+            console.error("Failed to load wallpaper from localStorage", error);
+            return 'https://images.unsplash.com/photo-1451187580459-43490279c0fa?q=80&w=2072&auto=format&fit=crop';
+        }
+    });
+    
+    const [dockedApps, setDockedApps] = useState<AppId[]>([]);
+    
+    const lastWindowState = React.useRef<Map<string, {pos: {x:number, y:number}, size:{width:number, height:number}}>>(new Map());
+    
+    const aiPromptHandler = useRef<((prompt: string) => void) | null>(null);
+    const aiVoiceHandler = useRef<(() => void) | null>(null);
+    const [isAiListening, setIsAiListening] = useState(false);
+
+    // --- Persistence Effects ---
+    useEffect(() => {
+        try {
+            localStorage.setItem('warmwind_os_fs', JSON.stringify(fileSystem));
+        } catch (e) { console.error("Failed to save filesystem state:", e); }
+    }, [fileSystem]);
+
+    useEffect(() => {
+        try {
+            localStorage.setItem('warmwind_os_windows', JSON.stringify(windows));
+        } catch (e) { console.error("Failed to save windows state:", e); }
+    }, [windows]);
+
+    useEffect(() => {
+        try {
+            const savedDock = localStorage.getItem('warmwind_os_dock_apps');
+            if (savedDock) {
+                setDockedApps(JSON.parse(savedDock));
+            } else {
+                setDockedApps(APP_DEFINITIONS.filter(app => app.isDefault).map(app => app.id));
+            }
+        } catch (error) {
+            console.error("Failed to load dock apps from localStorage", error);
+            setDockedApps(APP_DEFINITIONS.filter(app => app.isDefault).map(app => app.id));
+        }
+    }, []);
+
+    useEffect(() => {
+        if (dockedApps.length > 0) { // Avoid writing the initial empty array
+            localStorage.setItem('warmwind_os_dock_apps', JSON.stringify(dockedApps));
+        }
+    }, [dockedApps]);
+
+    useEffect(() => {
+        try {
+            localStorage.setItem('warmwind_os_wallpaper', wallpaper);
+        } catch (error) {
+            console.error("Failed to save wallpaper to localStorage", error);
+        }
+    }, [wallpaper]);
+
+    useEffect(() => {
+        try {
+            localStorage.setItem('warmwind_os_theme', JSON.stringify(theme));
+            const root = document.documentElement;
+            root.style.setProperty('--accent-color', theme.accentColor);
+            root.style.setProperty('--font-family', theme.fontFamily);
+            root.className = theme.mode;
+        } catch (e) {
+            console.error("Failed to save theme state:", e);
+        }
+    }, [theme]);
+
+
+    const getAppDefinition = useCallback((appId: AppId): AppDefinition | undefined => {
+        return APP_DEFINITIONS.find(app => app.id === appId);
+    }, []);
+
+    const openApp = useCallback((appId: AppId, args?: any) => {
+        const appDef = getAppDefinition(appId);
+        if (!appDef) return;
+
+        let windowTitle = args?.title || appDef.name;
+        if (!args?.title && args?.file?.name) {
+            if (appId === 'text_editor') {
+                 windowTitle = args.file.name;
+            } else {
+                 windowTitle = `${appDef.name} - ${args.file.name}`;
+            }
+        }
+        
+        const existingWindow = windows.find(w => w.appId === appId);
+        if(existingWindow && appId !== 'text_editor' && appId !== 'media_viewer' && appId !== 'properties_viewer'){
+            focusApp(existingWindow.id);
+            return;
+        }
+
+
+        const newWindow: WindowInstance = {
+            id: `${appId}-${Date.now()}`,
+            appId,
+            title: windowTitle,
+            position: { x: Math.random() * 200 + 50, y: Math.random() * 200 + 50 },
+            size: { width: appDef.defaultSize[0], height: appDef.defaultSize[1] },
+            zIndex: nextZIndex + 1,
+            isMinimized: false,
+            isMaximized: false,
+            ...args
+        };
+        
+        setWindows(prev => [...prev, newWindow]);
+        setActiveWindowId(newWindow.id);
+        setNextZIndex(prev => prev + 1);
+    }, [nextZIndex, getAppDefinition, windows]);
+
+    const closeApp = useCallback((id: string) => {
+        setWindows(prev => prev.filter(win => win.id !== id));
+        if (activeWindowId === id) {
+             const remainingWindows = windows.filter(win => win.id !== id && !win.isMinimized);
+             setActiveWindowId(remainingWindows.length > 0 ? remainingWindows.sort((a,b) => b.zIndex - a.zIndex)[0].id : null);
+        }
+    }, [activeWindowId, windows]);
+
+    const focusApp = useCallback((id: string) => {
+        if (id === activeWindowId && !windows.find(w => w.id === id)?.isMinimized) return;
+        setNextZIndex(prevZ => {
+            const newZ = prevZ + 1;
+            setWindows(currentWindows => 
+                currentWindows.map(win => win.id === id ? { ...win, zIndex: newZ, isMinimized: false } : win)
+            );
+            return newZ;
+        });
+        setActiveWindowId(id);
+    }, [activeWindowId, windows]);
+
+    const minimizeApp = useCallback((id: string) => {
+        setWindows(prev => prev.map(win => win.id === id ? { ...win, isMinimized: !win.isMinimized } : win));
+        const wasMinimized = windows.find(w => w.id === id)?.isMinimized;
+        if (!wasMinimized) {
+            const otherWindows = windows.filter(w => w.id !== id && !w.isMinimized);
+            if(otherWindows.length > 0) {
+                 setActiveWindowId(otherWindows.sort((a,b) => b.zIndex - a.zIndex)[0].id);
+            } else {
+                 setActiveWindowId(null);
+            }
+        } else {
+            focusApp(id);
+        }
+    }, [windows, focusApp]);
+    
+    const toggleMaximizeApp = useCallback((id: string) => {
+        setWindows(prev => prev.map(win => {
+            if (win.id === id) {
+                if (win.isMaximized) { // Restore
+                    const lastState = lastWindowState.current.get(id);
+                    return { ...win, isMaximized: false, position: lastState?.pos || win.position, size: lastState?.size || win.size };
+                } else { // Maximize
+                    lastWindowState.current.set(id, {pos: win.position, size: win.size});
+                    return { ...win, isMaximized: true };
+                }
+            }
+            return win;
+        }));
+    }, []);
+
+    const updateWindow = useCallback((id: string, updates: Partial<Pick<WindowInstance, 'position' | 'size'>>) => {
+        setWindows(prev => prev.map(win => win.id === id ? { ...win, ...updates } : win));
+    }, []);
+
+    const sendNotification = useCallback((notificationData: Omit<Notification, 'id' | 'timestamp' | 'read'>) => {
+        const newNotification: Notification = {
+            id: `notif-${Date.now()}`,
+            ...notificationData,
+            timestamp: new Date().toISOString(),
+            read: false,
+        };
+        setNotifications(prev => [newNotification, ...prev]);
+    }, []);
+
+    const markNotificationsAsRead = useCallback(() => {
+        setNotifications(prev => prev.map(n => n.read ? n : { ...n, read: true }));
+    }, []);
+
+    const clearAllNotifications = useCallback(() => {
+        setNotifications([]);
+    }, []);
+
+    useEffect(() => {
+        const handleKeyDown = (event: KeyboardEvent) => {
+            // Hotkey for closing the active window (Alt+F4)
+            if (event.altKey && event.key === 'F4') {
+                event.preventDefault(); // Prevent closing the browser tab
+                if (activeWindowId) {
+                    closeApp(activeWindowId);
+                }
+            }
+
+            // Hotkey for opening AI Assistant (Ctrl+Alt+A)
+            if (event.ctrlKey && event.altKey && event.key.toLowerCase() === 'a') {
+                event.preventDefault();
+                openApp('ai_assistant');
+            }
+
+            // Hotkey for opening File Explorer (Ctrl+Alt+E)
+            if (event.ctrlKey && event.altKey && event.key.toLowerCase() === 'e') {
+                event.preventDefault();
+                openApp('file_explorer');
+            }
+        };
+
+        document.addEventListener('keydown', handleKeyDown);
+        return () => {
+            document.removeEventListener('keydown', handleKeyDown);
+        };
+    }, [activeWindowId, closeApp, openApp]);
+
+    const contextValue = useMemo(() => ({
+        windows, openApp, closeApp, focusApp, minimizeApp, toggleMaximizeApp, updateWindow, wallpaper, setWallpaper, getAppDefinition, fileSystem, fsDispatch, activeWindowId, dockedApps, setDockedApps, aiPromptHandler, aiVoiceHandler, isAiListening, setIsAiListening, theme, setTheme,
+        notifications, sendNotification, markNotificationsAsRead, clearAllNotifications
+    }), [windows, openApp, closeApp, focusApp, minimizeApp, toggleMaximizeApp, updateWindow, wallpaper, setWallpaper, getAppDefinition, fileSystem, activeWindowId, dockedApps, setDockedApps, isAiListening, theme, notifications, sendNotification, markNotificationsAsRead, clearAllNotifications]);
+
+    return (
+        <AppContext.Provider value={contextValue}>
+            <main className="h-screen w-screen font-sans overflow-hidden">
+                <div className="absolute inset-0 bg-cover bg-center transition-all duration-500" style={{ backgroundImage: `url(${wallpaper})` }} />
+                <TopMenuBar />
+                <Desktop />
+                
+                {windows.filter(win => !win.isMinimized).map(win => (
+                    <WindowComponent
+                        key={win.id}
+                        instance={win}
+                        onClose={closeApp}
+                        onMinimize={minimizeApp}
+                        onMaximize={toggleMaximizeApp}
+                        onFocus={focusApp}
+                        onUpdateWindow={updateWindow}
+                        isActive={win.id === activeWindowId}
+                    >
+                        <AppRenderer appId={win.appId} args={win} />
+                    </WindowComponent>
+                ))}
+                
+                <Taskbar />
+                <NotificationToasts />
+            </main>
+        </AppContext.Provider>
+    );
+};
+
+export default App;
