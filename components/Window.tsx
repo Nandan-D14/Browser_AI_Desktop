@@ -26,6 +26,7 @@ const WindowComponent: React.FC<WindowProps> = ({ instance, onClose, onMinimize,
 
   const dragStartPos = useRef({ x: 0, y: 0 });
   const resizeStartInfo = useRef({ x: 0, y: 0, width: 0, height: 0 });
+  const titleId = `window-title-${id}`;
   
   useEffect(() => {
     // Animate in on mount
@@ -163,6 +164,10 @@ const WindowComponent: React.FC<WindowProps> = ({ instance, onClose, onMinimize,
       style={windowStyle}
       className={`absolute flex flex-col backdrop-blur-3xl border rounded-xl shadow-2xl shadow-black/50 overflow-hidden transition-all duration-300 ease-in-out ${animationClasses}`}
       onMouseDown={() => onFocus(id)}
+      role="dialog"
+      aria-modal="false"
+      aria-labelledby={titleId}
+      aria-label={title}
     >
       <div
         className={`relative flex items-center justify-between h-8 px-2 select-none ${isMaximized ? '' : 'cursor-move'}`}
@@ -170,12 +175,12 @@ const WindowComponent: React.FC<WindowProps> = ({ instance, onClose, onMinimize,
         onDoubleClick={() => onMaximize(id)}
       >
         <div className="flex items-center space-x-2 z-10">
-            <button onClick={handleClose} className="w-3 h-3 rounded-full bg-red-500 hover:bg-red-400 focus:outline-none"></button>
-            <button onClick={handleMinimize} className="w-3 h-3 rounded-full bg-yellow-500 hover:bg-yellow-400 focus:outline-none"></button>
-            <button onClick={() => onMaximize(id)} className="w-3 h-3 rounded-full bg-green-500 hover:bg-green-400 focus:outline-none"></button>
+            <button aria-label="Close" onClick={handleClose} className="w-3 h-3 rounded-full bg-red-500 hover:bg-red-400 focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-red-500"></button>
+            <button aria-label="Minimize" onClick={handleMinimize} className="w-3 h-3 rounded-full bg-yellow-500 hover:bg-yellow-400 focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-yellow-500"></button>
+            <button aria-label="Maximize" onClick={() => onMaximize(id)} className="w-3 h-3 rounded-full bg-green-500 hover:bg-green-400 focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-green-500"></button>
         </div>
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-          <span className="text-sm font-semibold truncate" style={{ color: 'var(--text-secondary)'}}>{title}</span>
+          <span id={titleId} className="text-sm font-semibold truncate" style={{ color: 'var(--text-secondary)'}}>{title}</span>
         </div>
       </div>
       <div className="flex-grow overflow-auto relative" style={{ backgroundColor: 'var(--window-content-bg)'}}>

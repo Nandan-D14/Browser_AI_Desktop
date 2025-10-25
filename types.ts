@@ -48,6 +48,11 @@ export interface Theme {
   fontFamily: string;
 }
 
+export interface SoundSettings {
+  volume: number; // 0 to 1
+  playSounds: boolean;
+}
+
 export interface Notification {
   id: string;
   appId: AppId;
@@ -80,6 +85,8 @@ export interface AppContextType {
   setIsAiListening: React.Dispatch<React.SetStateAction<boolean>>;
   theme: Theme;
   setTheme: React.Dispatch<React.SetStateAction<Theme>>;
+  soundSettings: SoundSettings;
+  setSoundSettings: React.Dispatch<React.SetStateAction<SoundSettings>>;
   notifications: Notification[];
   sendNotification: (notification: Omit<Notification, 'id' | 'timestamp' | 'read'>) => void;
   markNotificationsAsRead: () => void;

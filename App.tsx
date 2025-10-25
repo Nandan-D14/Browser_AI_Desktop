@@ -1,6 +1,5 @@
-
 import React, { useState, useCallback, useMemo, createContext, useReducer, useRef, useEffect, useContext } from 'react';
-import { AppContextType, AppDefinition, AppId, WindowInstance, FileSystemNode, FileSystemAction, Theme, Notification } from './types';
+import { AppContextType, AppDefinition, AppId, WindowInstance, FileSystemNode, FileSystemAction, Theme, Notification, SoundSettings } from './types';
 import { APP_DEFINITIONS, StartIcon, initialFileSystem, FolderIcon, FileTextIcon, ImageIcon, BellIcon } from './constants';
 import WindowComponent from './components/Window';
 import { AppRenderer, ContextMenu } from './components/Applications';
@@ -50,8 +49,8 @@ const Desktop: React.FC = () => {
         <div className="absolute inset-0 p-4 pt-10">
             <div className="flex flex-col items-start space-y-4">
             {APP_DEFINITIONS.filter(app => app.isDefault).map(app => (
-                 <div key={app.id} onDoubleClick={() => openApp(app.id)} className="flex flex-col items-center space-y-1 text-center w-20 cursor-pointer p-2 rounded hover:bg-white/10">
-                    <app.icon className="w-12 h-12 drop-shadow-lg" />
+                 <div key={app.id} onDoubleClick={() => openApp(app.id)} className="flex flex-col items-center space-y-1 text-center w-20 cursor-pointer p-2 rounded hover:bg-white/10" tabIndex={0} onKeyPress={(e) => e.key === 'Enter' && openApp(app.id)}>
+                    <app.icon className="w-12 h-12 drop-shadow-lg" aria-hidden="true" />
                     <span className="text-xs shadow-black/50" style={{ color: theme.mode === 'dark' ? '#fff' : '#111', textShadow: theme.mode === 'dark' ? '1px 1px 2px black' : 'none' }}>{app.name}</span>
                  </div>
             ))}
@@ -75,7 +74,7 @@ const NotificationPanel: React.FC<{ onClose: () => void }> = ({ onClose }) => {
     }, [onClose]);
 
     return (
-        <div ref={panelRef} className="absolute top-full right-0 mt-1 w-80 bg-[var(--bg-secondary)] backdrop-blur-xl rounded-lg shadow-lg border border-[var(--border-color)] text-sm flex flex-col max-h-[32rem]">
+        <div ref={panelRef} className="absolute top-full right-0 mt-1 w-80 bg-[var(--bg-secondary)] backdrop-blur-xl rounded-lg shadow-lg border border-[var(--border-color)] text-sm flex flex-col max-h-[32rem]" role="region" aria-label="Notification Panel">
             <div className="flex justify-between items-center p-3 border-b border-[var(--border-color)]">
                 <h3 className="font-semibold text-[var(--text-primary)]">Notifications</h3>
                 {notifications.length > 0 && (
@@ -89,7 +88,7 @@ const NotificationPanel: React.FC<{ onClose: () => void }> = ({ onClose }) => {
                         return (
                             <li key={n.id} className="p-2 rounded-md hover:bg-[var(--bg-tertiary)]">
                                 <div className="flex items-start gap-3">
-                                    <AppIcon className="w-6 h-6 flex-shrink-0 mt-1" />
+                                    <AppIcon className="w-6 h-6 flex-shrink-0 mt-1" aria-hidden="true" />
                                     <div className="flex-grow">
                                         <p className="font-semibold text-[var(--text-primary)]">{n.title}</p>
                                         <p className="text-xs text-[var(--text-secondary)]">{n.message}</p>
@@ -204,14 +203,14 @@ const TopMenuBar: React.FC = () => {
     };
 
     return (
-        <div className="absolute top-0 left-0 right-0 h-7 bg-[var(--topbar-bg)] backdrop-blur-3xl flex items-center px-4 z-[100000] justify-between text-[var(--text-primary)] text-sm font-semibold border-b border-[var(--border-color)]">
+        <header role="menubar" className="absolute top-0 left-0 right-0 h-7 bg-[var(--topbar-bg)] backdrop-blur-3xl flex items-center px-4 z-[100000] justify-between text-[var(--text-primary)] text-sm font-semibold border-b border-[var(--border-color)]">
             <div className="flex items-center gap-4">
                 <div className="relative" ref={menuRef}>
-                    <button onClick={handleMenuToggle}>
+                    <button onClick={handleMenuToggle} aria-haspopup="true" aria-expanded={isMenuOpen} aria-label="Start menu">
                         <StartIcon className="w-5 h-5" style={{ stroke: 'var(--text-primary)'}} />
                     </button>
                     {isMenuOpen && (
-                        <div className="absolute top-full left-0 mt-1 w-80 bg-[var(--bg-secondary)] backdrop-blur-xl rounded-lg shadow-lg border border-[var(--border-color)] text-sm" onClick={() => setMenuContextMenu(null)}>
+                        <div role="menu" className="absolute top-full left-0 mt-1 w-80 bg-[var(--bg-secondary)] backdrop-blur-xl rounded-lg shadow-lg border border-[var(--border-color)] text-sm" onClick={() => setMenuContextMenu(null)}>
                            <div className="p-2 border-b border-[var(--border-color)]">
                                 <input
                                     type="text"
@@ -221,9 +220,10 @@ const TopMenuBar: React.FC = () => {
                                     value={searchQuery}
                                     onChange={(e) => setSearchQuery(e.target.value)}
                                     autoFocus
+                                    aria-label="Search applications"
                                 />
                            </div>
-                           <ul className="py-1 max-h-[28rem] overflow-y-auto text-[var(--text-primary)]">
+                           <ul className="py-1 max-h-[28rem] overflow-y-auto text-[var(--text-primary)]" role="none">
                                 {!searchQuery.trim() ? (
                                     <>
                                         {APP_DEFINITIONS.map(app => (
@@ -233,13 +233,14 @@ const TopMenuBar: React.FC = () => {
                                                 onContextMenu={(e) => { e.preventDefault(); setMenuContextMenu({ x: e.clientX, y: e.clientY, app })}}
                                                 className="px-3 py-2 hover:bg-[var(--hover-color)] cursor-pointer flex items-center gap-3"
                                                 style={accentHoverStyle}
+                                                role="menuitem"
                                             >
-                                                <app.icon className="w-6 h-6 flex-shrink-0" />
+                                                <app.icon className="w-6 h-6 flex-shrink-0" aria-hidden="true" />
                                                 <span>{app.name}</span>
                                             </li>
                                         ))}
-                                        <li className='border-t border-[var(--border-color)] mt-1 pt-1'>
-                                            <div onClick={handleAboutClick} style={accentHoverStyle} className="px-3 py-2 hover:bg-[var(--hover-color)] cursor-pointer flex items-center gap-3">About This OS</div>
+                                        <li className='border-t border-[var(--border-color)] mt-1 pt-1' role="separator">
+                                            <div onClick={handleAboutClick} style={accentHoverStyle} className="px-3 py-2 hover:bg-[var(--hover-color)] cursor-pointer flex items-center gap-3" role="menuitem">About This OS</div>
                                         </li>
                                     </>
                                 ) : (
@@ -252,8 +253,9 @@ const TopMenuBar: React.FC = () => {
                                                     onContextMenu={(e) => { e.preventDefault(); setMenuContextMenu({ x: e.clientX, y: e.clientY, app }); }}
                                                     className="px-3 py-2 hover:bg-[var(--hover-color)] cursor-pointer flex items-center gap-3"
                                                     style={accentHoverStyle}
+                                                    role="menuitem"
                                                 >
-                                                    <app.icon className="w-6 h-6 flex-shrink-0" />
+                                                    <app.icon className="w-6 h-6 flex-shrink-0" aria-hidden="true"/>
                                                     <span>{app.name}</span>
                                                 </li>
                                             ))
@@ -271,8 +273,8 @@ const TopMenuBar: React.FC = () => {
             <div className="flex items-center gap-4">
                  <div>{time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
                  <div className="relative">
-                    <button onClick={handleNotificationToggle} className="relative">
-                        <BellIcon className="w-5 h-5" />
+                    <button onClick={handleNotificationToggle} className="relative" aria-haspopup="true" aria-expanded={isNotificationPanelOpen} aria-label={`Notifications, ${unreadCount} unread`}>
+                        <BellIcon className="w-5 h-5" aria-hidden="true"/>
                         {unreadCount > 0 && (
                              <span className="absolute top-0 right-0 block h-2 w-2 transform translate-x-1/2 -translate-y-1/2 rounded-full bg-red-500 ring-1 ring-[var(--topbar-bg)]"></span>
                         )}
@@ -281,7 +283,7 @@ const TopMenuBar: React.FC = () => {
                  </div>
             </div>
             {menuContextMenu && <ContextMenu x={menuContextMenu.x} y={menuContextMenu.y} items={menuContextItems} onClose={() => setMenuContextMenu(null)} />}
-        </div>
+        </header>
     )
 };
 
@@ -327,18 +329,19 @@ const TaskbarPreview: React.FC<{
                 >
                     <div className="flex justify-between items-start gap-2">
                         <div className="flex items-start gap-2 overflow-hidden">
-                            <appDef.icon className="w-5 h-5 flex-shrink-0 mt-0.5" />
+                            <appDef.icon className="w-5 h-5 flex-shrink-0 mt-0.5" aria-hidden="true" />
                             <span className="text-xs text-[var(--text-primary)] truncate">{win.title}</span>
                         </div>
                         <button
                             onClick={(e) => { e.stopPropagation(); closeApp(win.id); }}
                             className="p-0.5 rounded-full hover:bg-[var(--bg-tertiary)] flex-shrink-0"
+                            aria-label={`Close ${win.title}`}
                         >
                             <svg className="w-3 h-3 text-[var(--text-secondary)]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M6 18L18 6M6 6l12 12" /></svg>
                         </button>
                     </div>
                     <div className="mt-2 h-24 bg-[var(--bg-primary)] rounded-md flex items-center justify-center overflow-hidden">
-                       <appDef.icon className="w-10 h-10 text-[var(--text-secondary)] opacity-50" />
+                       <appDef.icon className="w-10 h-10 text-[var(--text-secondary)] opacity-50" aria-hidden="true" />
                     </div>
                 </div>
             ))}
@@ -442,6 +445,8 @@ const Taskbar: React.FC = () => {
         <>
             <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-[100000]">
                 <div 
+                    role="toolbar"
+                    aria-label="Taskbar"
                     className="flex items-center bg-black/25 backdrop-blur-2xl p-2 rounded-full border border-white/20 shadow-2xl shadow-black/50 transition-all duration-300 ease-in-out focus-within:shadow-lg focus-within:shadow-blue-500/50 focus-within:border-white/30"
                     onClick={() => setTaskbarContextMenu(null)}
                     onMouseLeave={hidePreview}
@@ -471,27 +476,27 @@ const Taskbar: React.FC = () => {
                                 <button 
                                     onClick={handleIconClick} 
                                     onContextMenu={(e) => handleIconContextMenu(e, appDef.id)}
-                                    title={appDef.name} 
+                                    aria-label={appDef.name}
                                     className="p-2 rounded-full hover:bg-white/20 transition-all transform group-hover:scale-110"
                                 >
-                                    <appDef.icon className="w-8 h-8" />
+                                    <appDef.icon className="w-8 h-8" aria-hidden="true" />
                                 </button>
                                 {isRunning && (
-                                    <div className={`absolute bottom-1 left-1/2 -translate-x-1/2 h-1.5 bg-white rounded-full transition-all duration-200 ${isGrouped ? 'w-2.5' : 'w-1.5'}`}></div>
+                                    <div className={`absolute bottom-1 left-1/2 -translate-x-1/2 h-1.5 bg-white rounded-full transition-all duration-200 ${isGrouped ? 'w-2.5' : 'w-1.5'}`} aria-hidden="true"></div>
                                 )}
                             </div>
                         )
                     })}
                     
-                    {taskbarApps.length > 0 && <div className="w-px h-10 bg-white/20 mx-2" />}
+                    {taskbarApps.length > 0 && <div className="w-px h-10 bg-white/20 mx-2" aria-hidden="true" />}
                     
                     <button
                         onClick={handleVoiceClick}
                         className={`relative flex-shrink-0 p-2 rounded-full transition-colors duration-200 text-white ${isAiListening ? 'bg-red-600' : 'bg-green-600 hover:bg-green-500'}`}
-                        title="Start voice conversation"
+                        aria-label="Start voice conversation"
                     >
-                        {isAiListening && <span className="absolute inset-0 bg-red-500 rounded-full animate-ping"></span>}
-                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" x2="12" y1="19" y2="22"></line></svg>
+                        {isAiListening && <span className="absolute inset-0 bg-red-500 rounded-full animate-ping" aria-hidden="true"></span>}
+                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" x2="12" y1="19" y2="22"></line></svg>
                     </button>
                     <input
                         type="text"
@@ -501,15 +506,16 @@ const Taskbar: React.FC = () => {
                         className="flex-grow bg-transparent border-none text-white px-4 text-sm focus:outline-none placeholder-gray-400 min-w-[20rem]"
                         placeholder={isAiListening ? "Listening..." : "Ask AI anything..."}
                         disabled={isAiListening}
+                        aria-label="Ask AI anything"
                     />
                     <button
                         onClick={handleSubmit}
                         disabled={isAiListening || !input.trim()}
                         style={{ backgroundColor: isAiListening || !input.trim() ? '' : theme.accentColor }}
                         className="flex-shrink-0 p-2 rounded-full hover:opacity-90 disabled:bg-gray-600 disabled:cursor-not-allowed text-white transition-colors duration-200"
-                        title="Send message"
+                        aria-label="Send message"
                     >
-                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
                     </button>
                 </div>
             </div>
@@ -551,18 +557,18 @@ const NotificationToasts: React.FC = () => {
     };
 
     return (
-        <div className="fixed bottom-4 right-4 z-[200000] w-80 space-y-2">
+        <div role="region" aria-live="polite" aria-label="Notifications" className="fixed bottom-4 right-4 z-[200000] w-80 space-y-2">
             {visibleToasts.map(toast => {
                 const AppIcon = getAppDefinition(toast.appId)?.icon || 'div';
                 return (
-                    <div key={toast.id} className="bg-[var(--bg-secondary)] backdrop-blur-xl rounded-lg shadow-lg border border-[var(--border-color)] p-3 animate-toast-in">
+                    <div key={toast.id} role="status" aria-atomic="true" className="bg-[var(--bg-secondary)] backdrop-blur-xl rounded-lg shadow-lg border border-[var(--border-color)] p-3 animate-toast-in">
                         <div className="flex items-start gap-3">
-                            <AppIcon className="w-6 h-6 flex-shrink-0 mt-1" />
+                            <AppIcon className="w-6 h-6 flex-shrink-0 mt-1" aria-hidden="true" />
                             <div className="flex-grow">
                                 <p className="font-semibold text-sm text-[var(--text-primary)]">{toast.title}</p>
                                 <p className="text-xs text-[var(--text-secondary)]">{toast.message}</p>
                             </div>
-                            <button onClick={() => removeToast(toast.id)} className="p-1 rounded-full hover:bg-[var(--bg-tertiary)] -mt-1 -mr-1">
+                            <button onClick={() => removeToast(toast.id)} aria-label="Dismiss notification" className="p-1 rounded-full hover:bg-[var(--bg-tertiary)] -mt-1 -mr-1">
                                 <svg className="w-4 h-4 text-[var(--text-secondary)]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
                             </button>
                         </div>
@@ -627,6 +633,19 @@ const App: React.FC = () => {
         }
     });
 
+    const [soundSettings, setSoundSettings] = useState<SoundSettings>(() => {
+        try {
+            const saved = localStorage.getItem('warmwind_os_sound');
+            return saved ? JSON.parse(saved) : {
+                volume: 0.5,
+                playSounds: true,
+            };
+        } catch (e) {
+            console.error("Failed to load sound settings:", e);
+            return { volume: 0.5, playSounds: true };
+        }
+    });
+
 
     const [activeWindowId, setActiveWindowId] = useState<string | null>(null); // Active window is transient on reload
     
@@ -664,6 +683,7 @@ const App: React.FC = () => {
     const aiPromptHandler = useRef<((prompt: string) => void) | null>(null);
     const aiVoiceHandler = useRef<(() => void) | null>(null);
     const [isAiListening, setIsAiListening] = useState(false);
+    const notificationAudioRef = useRef<HTMLAudioElement | null>(null);
 
     // --- Persistence Effects ---
     useEffect(() => {
@@ -718,6 +738,17 @@ const App: React.FC = () => {
         }
     }, [theme]);
 
+    useEffect(() => {
+        try {
+            localStorage.setItem('warmwind_os_sound', JSON.stringify(soundSettings));
+        } catch (e) {
+            console.error("Failed to save sound settings:", e);
+        }
+    }, [soundSettings]);
+
+    useEffect(() => {
+        notificationAudioRef.current = new Audio('data:audio/ogg;base64,T2dnUwACAAAAAAAAAABnHAAAAAAAAAAAAAAAAB8BHgF2b3JiaXMAAAAAAUSsAAAAAAAAYgAAYwAAAAABAAAAAAA++CBkJEIscg+w4xJBVjrDkHg/tAOAaBc5BJpxjzznInGPOOeecc84555xzzjnnnHPOOeecc84555xzzjnnnHPOOeecc84555xzzjnnnFsmQkSxyD5EjLGEFWesOQeD+0A4BoFzkEmnGPPOCcaAQw455JAhjjjiiCSOOSaZY456JqJDBhpllFImmWiimWZKa6455pknpXnmmmy2CSeaaJ56KqKstgpqqimmquqqqq7KKqustuoopLDCGmu22Wq77bbbbbvuttz222+/DTfccMMNN+ywxRZbbrvtuhvvuO2+G/DAAw888MADDzzwwAOPPPDAAw888MADDzwgAgA=');
+    }, []);
 
     const getAppDefinition = useCallback((appId: AppId): AppDefinition | undefined => {
         return APP_DEFINITIONS.find(app => app.id === appId);
@@ -822,7 +853,12 @@ const App: React.FC = () => {
             read: false,
         };
         setNotifications(prev => [newNotification, ...prev]);
-    }, []);
+
+        if (soundSettings.playSounds && notificationAudioRef.current) {
+            notificationAudioRef.current.volume = soundSettings.volume;
+            notificationAudioRef.current.play().catch(e => console.error("Error playing notification sound:", e));
+        }
+    }, [soundSettings]);
 
     const markNotificationsAsRead = useCallback(() => {
         setNotifications(prev => prev.map(n => n.read ? n : { ...n, read: true }));
@@ -863,8 +899,9 @@ const App: React.FC = () => {
 
     const contextValue = useMemo(() => ({
         windows, openApp, closeApp, focusApp, minimizeApp, toggleMaximizeApp, updateWindow, wallpaper, setWallpaper, getAppDefinition, fileSystem, fsDispatch, activeWindowId, dockedApps, setDockedApps, aiPromptHandler, aiVoiceHandler, isAiListening, setIsAiListening, theme, setTheme,
+        soundSettings, setSoundSettings,
         notifications, sendNotification, markNotificationsAsRead, clearAllNotifications
-    }), [windows, openApp, closeApp, focusApp, minimizeApp, toggleMaximizeApp, updateWindow, wallpaper, setWallpaper, getAppDefinition, fileSystem, activeWindowId, dockedApps, setDockedApps, isAiListening, theme, notifications, sendNotification, markNotificationsAsRead, clearAllNotifications]);
+    }), [windows, openApp, closeApp, focusApp, minimizeApp, toggleMaximizeApp, updateWindow, wallpaper, setWallpaper, getAppDefinition, fileSystem, activeWindowId, dockedApps, setDockedApps, isAiListening, theme, soundSettings, notifications, sendNotification, markNotificationsAsRead, clearAllNotifications]);
 
     return (
         <AppContext.Provider value={contextValue}>
