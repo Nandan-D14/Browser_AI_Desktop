@@ -1,4 +1,5 @@
 
+
 import React, { useState, useCallback, useMemo, createContext, useReducer, useRef, useEffect, useContext } from 'react';
 import { AppContextType, AppDefinition, AppId, WindowInstance, FileSystemNode, FileSystemAction, Theme, Notification, SoundSettings } from './types';
 import { APP_DEFINITIONS, initialFileSystem, FolderIcon, FileTextIcon, ImageIcon, BellIcon, AppsIcon } from './constants';
@@ -492,6 +493,8 @@ const Taskbar: React.FC = () => {
                             </div>
                         )
                     })}
+                    
+                    <div className="w-px h-6 bg-white/20 mx-2 self-center"></div>
                     
                     <button
                         onClick={handleVoiceClick}

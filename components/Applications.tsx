@@ -1372,7 +1372,7 @@ export const Settings: React.FC = () => {
 
 // --- Text Editor ---
 export const TextEditor: React.FC<{ file?: FileSystemNode }> = ({ file }) => {
-    const { fsDispatch } = useContext(AppContext)!;
+    const { fsDispatch, theme } = useContext(AppContext)!;
     const [content, setContent] = useState(file?.content || '');
     const [isDirty, setIsDirty] = useState(false);
 
@@ -1403,7 +1403,11 @@ export const TextEditor: React.FC<{ file?: FileSystemNode }> = ({ file }) => {
         <div className="h-full flex flex-col bg-transparent">
             {file && (
                  <div className="flex-shrink-0 p-2 border-b border-[var(--border-color)]">
-                    <button onClick={handleSave} className="px-3 py-1 bg-blue-600 text-white rounded-md text-sm hover:bg-blue-500 disabled:bg-gray-500" disabled={!isDirty}>
+                    <button 
+                        onClick={handleSave} 
+                        style={{ backgroundColor: isDirty ? theme.accentColor : undefined }}
+                        className={`px-3 py-1 rounded-md text-sm transition-colors ${isDirty ? 'text-white hover:opacity-90' : 'bg-gray-600 text-gray-400 cursor-not-allowed'}`}
+                        disabled={!isDirty}>
                         Save {isDirty && '*'}
                     </button>
                  </div>
