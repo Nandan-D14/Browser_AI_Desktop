@@ -1,5 +1,5 @@
 {
-  "name": "WarmWind OS - AI Virtual PC",
+  "name": "NewOS - AI Virtual PC",
   "description": "A browser-based virtual AI computer that feels and behaves like a real PC. It includes a desktop, file system, settings, app launcher, multitasking, and a powerful integrated AI assistant powered by Gemini.",
   "requestFramePermissions": [
     "microphone"

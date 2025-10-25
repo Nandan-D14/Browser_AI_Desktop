@@ -172,7 +172,7 @@ export const initialFileSystem: FileSystemNode = {
       id: 'readme',
       name: 'README.md',
       type: 'file',
-      content: `# Welcome to WarmWind OS!
+      content: `# Welcome to NewOS!
 
 This is a virtual operating system running in your browser, powered by React and AI.
 

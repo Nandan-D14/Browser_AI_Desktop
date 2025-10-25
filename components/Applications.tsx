@@ -1084,344 +1084,209 @@ export const FileExplorer: React.FC<{ file?: FileSystemNode }> = ({ file: initia
 
 // --- Terminal ---
 export const Terminal: React.FC<{ initialCommand?: string }> = ({ initialCommand }) => {
-    const { fileSystem } = useContext(AppContext)!;
-    const [history, setHistory] = useState<string[]>(['Welcome to WarmWind OS Terminal']);
+    const { fileSystem, openApp } = useContext(AppContext)!;
+    const [history, setHistory] = useState<string[]>(['Welcome to NewOS Terminal. Type "help" for a list of commands.']);
     const [input, setInput] = useState('');
+    const [currentPath, setCurrentPath] = useState<string[]>(['root']);
     const inputRef = useRef<HTMLInputElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
 
-    const handleCommand = (cmd: string) => {
-        const newHistory = [...history, `> ${cmd}`];
-        const [command, ...args] = cmd.split(' ');
-        let output = '';
-
-        // Simple command handling
-        switch (command) {
-            case 'help':
-                output = 'Available commands: help, clear, ls, echo, date';
-                break;
-            case 'clear':
-                setHistory([]);
-                return;
-            case 'echo':
-                output = args.join(' ');
-                break;
-            case 'date':
-                output = new Date().toString();
-                break;
-            case 'ls':
-                // For simplicity, lists root files. A real terminal would track cwd.
-                output = fileSystem.children?.map(c => c.name).join('  ') || 'Empty';
-                break;
-            default:
-                output = `command not found: ${command}`;
+    const findNodeById = (root: FileSystemNode, nodeId: string): FileSystemNode | null => {
+        if (root.id === nodeId) return root;
+        if (root.children) {
+            for (const child of root.children) {
+                const found = findNodeById(child, nodeId);
+                if (found) return found;
+            }
         }
-        setHistory([...newHistory, output]);
+        return null;
     };
 
-    useEffect(() => {
-        if (initialCommand) {
-            handleCommand(initialCommand);
+    // Helper to get current directory node from path of IDs
+    const getCurrentFolder = (path: string[]): FileSystemNode | null => {
+        let node: FileSystemNode | null = fileSystem;
+        for (let i = 1; i < path.length; i++) {
+            node = node?.children?.find(c => c.id === path[i]) || null;
+            if (!node) return null;
         }
-    }, [initialCommand]);
+        return node;
+    };
+
+    const processCommand = (command: string): string => {
+        const [cmd, ...args] = command.trim().split(/\s+/);
+        const currentFolder = getCurrentFolder(currentPath);
+
+        switch (cmd) {
+            case 'help':
+                return [
+                    'Available commands:',
+                    '  ls         - List files and directories',
+                    '  cd [dir]   - Change directory',
+                    '  cat [file] - Display file content',
+                    '  echo ...   - Display a line of text',
+                    '  pwd        - Print working directory',
+                    '  clear      - Clear the terminal screen',
+                    '  open [file]- Open a file in its default app',
+                ].join('\n');
+            case 'ls':
+                if (!currentFolder || !currentFolder.children) return 'Error: Could not read directory.';
+                if (currentFolder.children.length === 0) return '';
+                return currentFolder.children.map(c => c.name).join('\n');
+            case 'cd':
+                if (args.length === 0 || args[0] === '~' || args[0] === '/') {
+                    setCurrentPath(['root']);
+                    return '';
+                }
+                const targetDir = args[0];
+                if (targetDir === '..') {
+                    if (currentPath.length > 1) {
+                        setCurrentPath(prev => prev.slice(0, -1));
+                    }
+                    return '';
+                }
+                const newFolder = currentFolder?.children?.find(c => c.name === targetDir && c.type === 'folder');
+                if (newFolder) {
+                    setCurrentPath(prev => [...prev, newFolder.id]);
+                    return '';
+                }
+                return `cd: no such file or directory: ${targetDir}`;
+            case 'cat':
+                if (args.length === 0) return 'cat: missing operand';
+                const fileToRead = currentFolder?.children?.find(c => c.name === args[0] && c.type === 'file');
+                if (fileToRead) {
+                    return fileToRead.content || '';
+                }
+                return `cat: ${args[0]}: No such file or directory`;
+            case 'pwd':
+                 return `/${currentPath.slice(1).map(id => findNodeById(fileSystem, id)?.name).join('/') || ''}`;
+            case 'echo':
+                return args.join(' ');
+            case 'clear':
+                setHistory([]);
+                return '';
+            case 'open':
+                 if (args.length === 0) return 'open: missing operand';
+                 const fileToOpen = currentFolder?.children?.find(c => c.name === args[0] && c.type === 'file');
+                 if (fileToOpen) {
+                     const mimeType = fileToOpen.mimeType || '';
+                     if (mimeType.startsWith('image/')) {
+                         openApp('media_viewer', { file: fileToOpen });
+                     } else if (mimeType === 'text/plain' || mimeType === 'text/markdown' || !mimeType) {
+                         openApp('text_editor', { file: fileToOpen });
+                     } else {
+                         return `open: cannot open files of type "${mimeType}"`;
+                     }
+                     return `Opening ${fileToOpen.name}...`;
+                 }
+                 return `open: ${args[0]}: No such file or directory`;
+            case '':
+                return '';
+            default:
+                return `${cmd}: command not found`;
+        }
+    };
+
+    const handleFormSubmit = (e: React.FormEvent) => {
+        e.preventDefault();
+        const pathString = `~${currentPath.slice(1).map(id => `/${findNodeById(fileSystem, id)?.name}`).join('')}`;
+        const commandLine = `${pathString} $ ${input}`;
+        
+        if (!input.trim()) {
+            setHistory(prev => [...prev, commandLine]);
+            setInput('');
+            return;
+        }
+
+        const output = processCommand(input);
+        
+        setHistory(prev => {
+            const newHistory = [...prev, commandLine];
+            if (output) newHistory.push(output);
+            return newHistory;
+        });
+        
+        setInput('');
+    };
 
     useEffect(() => {
         containerRef.current?.scrollTo(0, containerRef.current.scrollHeight);
     }, [history]);
+    
+    useEffect(() => {
+        if (initialCommand) {
+            setInput(initialCommand);
+        }
+        inputRef.current?.focus();
+    }, [initialCommand]);
+
+    const pathString = `~${currentPath.slice(1).map(id => `/${findNodeById(fileSystem, id)?.name}`).join('')}`;
 
     return (
-        <div className="h-full bg-black text-green-400 font-mono p-2 text-sm overflow-y-auto" ref={containerRef} onClick={() => inputRef.current?.focus()}>
-            <div role="log">
-                {history.map((line, index) => <div key={index}>{line}</div>)}
-            </div>
-            <div className="flex">
-                <label htmlFor="terminal-input" className="sr-only">Terminal Input</label>
-                <span>&gt;&nbsp;</span>
+        <div ref={containerRef} onClick={() => inputRef.current?.focus()} className="h-full bg-black/80 text-white font-mono p-2 overflow-y-auto text-sm leading-relaxed" role="log">
+            {history.map((line, index) => (
+                <pre key={index} className="whitespace-pre-wrap break-words">{line}</pre>
+            ))}
+            <form onSubmit={handleFormSubmit} className="flex">
+                <label htmlFor="terminal-input" className="sr-only">Terminal input</label>
+                <span className="text-green-400" aria-hidden="true">{pathString} $&nbsp;</span>
                 <input
                     id="terminal-input"
                     ref={inputRef}
                     type="text"
                     value={input}
                     onChange={(e) => setInput(e.target.value)}
-                    onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                            handleCommand(input);
-                            setInput('');
-                        }
-                    }}
-                    className="flex-grow bg-transparent border-none outline-none text-green-400"
-                    autoFocus
-                    autoCapitalize="off"
+                    className="flex-grow bg-transparent border-none focus:outline-none text-white"
                     autoComplete="off"
-                    autoCorrect="off"
+                    autoCapitalize="off"
+                    spellCheck="false"
                 />
-            </div>
+            </form>
         </div>
     );
 };
-
-// --- Settings ---
-const AppearanceSettings: React.FC = () => {
-    const { wallpaper, setWallpaper, theme, setTheme } = useContext(AppContext)!;
-    const [newWallpaperUrl, setNewWallpaperUrl] = useState(wallpaper);
-    const fonts = ['system-ui', 'monospace', 'serif', 'cursive'];
-    const accentColors = ['#3b82f6', '#ef4444', '#22c55e', '#f97316', '#a855f7'];
-
-    const handleWallpaperChange = () => {
-        if (newWallpaperUrl.trim()) {
-            setWallpaper(newWallpaperUrl);
-        }
-    };
-    
-    const updateTheme = (updates: Partial<Theme>) => {
-        setTheme(prev => ({ ...prev, ...updates }));
-    };
-
-    return (
-        <>
-            <h2 className="text-2xl font-bold mb-6">Appearance</h2>
-            <section className="mb-8" aria-labelledby="wallpaper-heading">
-                <h3 id="wallpaper-heading" className="text-lg font-semibold mb-2">Wallpaper</h3>
-                <div className="flex items-center gap-2">
-                    <label htmlFor="wallpaper-url" className="sr-only">Wallpaper Image URL</label>
-                    <input
-                        id="wallpaper-url"
-                        type="text"
-                        value={newWallpaperUrl}
-                        onChange={(e) => setNewWallpaperUrl(e.target.value)}
-                        className="flex-grow bg-[var(--bg-tertiary)] text-[var(--text-primary)] placeholder-[var(--text-secondary)] px-3 py-2 rounded-md border border-[var(--border-color)] focus:outline-none focus:ring-1"
-                        style={{'--tw-ring-color': theme.accentColor} as React.CSSProperties}
-                        placeholder="Enter image URL"
-                    />
-                    <button onClick={handleWallpaperChange} style={{ backgroundColor: theme.accentColor }} className="text-white px-4 py-2 rounded-md hover:opacity-90">Set</button>
-                </div>
-                <img src={wallpaper} alt="Current wallpaper preview" className="mt-4 w-48 h-28 object-cover rounded-md border-2 border-[var(--border-color)]" />
-            </section>
-            
-            <section className="mb-8" aria-labelledby="theme-mode-heading">
-                <h3 id="theme-mode-heading" className="text-lg font-semibold mb-2">Theme Mode</h3>
-                <div role="radiogroup" className="flex gap-4">
-                    <button role="radio" aria-checked={theme.mode === 'light'} onClick={() => updateTheme({ mode: 'light' })} className={`px-4 py-2 rounded-md border ${theme.mode === 'light' ? 'border-[var(--accent-color)]' : 'border-[var(--border-color)]'}`}>Light</button>
-                    <button role="radio" aria-checked={theme.mode === 'dark'} onClick={() => updateTheme({ mode: 'dark' })} className={`px-4 py-2 rounded-md border ${theme.mode === 'dark' ? 'border-[var(--accent-color)]' : 'border-[var(--border-color)]'}`}>Dark</button>
-                </div>
-            </section>
-
-            <section className="mb-8" aria-labelledby="accent-color-heading">
-                <h3 id="accent-color-heading" className="text-lg font-semibold mb-2">Accent Color</h3>
-                <div className="flex gap-3" role="radiogroup">
-                    {accentColors.map(color => (
-                        <button key={color} role="radio" aria-checked={theme.accentColor === color} aria-label={`Color ${color}`} onClick={() => updateTheme({ accentColor: color })}
-                            style={{ backgroundColor: color }}
-                            className={`w-8 h-8 rounded-full border-2 ${theme.accentColor === color ? 'border-white' : 'border-transparent'}`}></button>
-                    ))}
-                </div>
-            </section>
-            
-            <section aria-labelledby="font-family-heading">
-                <h3 id="font-family-heading" className="text-lg font-semibold mb-2">Font Family</h3>
-                <label htmlFor="font-select" className="sr-only">Select font family</label>
-                <select id="font-select" value={theme.fontFamily} onChange={(e) => updateTheme({ fontFamily: e.target.value })}
-                    className="bg-[var(--bg-tertiary)] text-[var(--text-primary)] px-3 py-2 rounded-md border border-[var(--border-color)] focus:outline-none">
-                    {fonts.map(font => <option key={font} value={font}>{font}</option>)}
-                </select>
-            </section>
-        </>
-    );
-};
-
-const SoundSettingsPane: React.FC = () => {
-    const { soundSettings, setSoundSettings } = useContext(AppContext)!;
-
-    const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-        setSoundSettings(prev => ({ ...prev, volume: parseFloat(e.target.value) }));
-    };
-
-    const togglePlaySounds = () => {
-        setSoundSettings(prev => ({ ...prev, playSounds: !prev.playSounds }));
-    };
-
-    return (
-        <>
-            <h2 className="text-2xl font-bold mb-6">Sounds</h2>
-            <section className="mb-8" aria-labelledby="volume-heading">
-                <h3 id="volume-heading" className="text-lg font-semibold mb-2">Master Volume</h3>
-                <div className="flex items-center gap-4">
-                    <SpeakerIcon className="w-6 h-6 text-[var(--text-secondary)]" />
-                    <input
-                        type="range"
-                        min="0"
-                        max="1"
-                        step="0.05"
-                        value={soundSettings.volume}
-                        onChange={handleVolumeChange}
-                        className="w-full h-2 bg-[var(--bg-tertiary)] rounded-lg appearance-none cursor-pointer"
-                        aria-label="Master volume"
-                    />
-                    <span className="w-12 text-center">{(soundSettings.volume * 100).toFixed(0)}%</span>
-                </div>
-            </section>
-            <section aria-labelledby="effects-heading">
-                <h3 id="effects-heading" className="text-lg font-semibold mb-2">Sound Effects</h3>
-                <div className="flex items-center justify-between p-2 rounded-md hover:bg-[var(--bg-tertiary)]">
-                    <label htmlFor="play-sounds-toggle" className="cursor-pointer">Play notification sounds</label>
-                    <button
-                        id="play-sounds-toggle"
-                        role="switch"
-                        aria-checked={soundSettings.playSounds}
-                        onClick={togglePlaySounds}
-                        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${soundSettings.playSounds ? 'bg-[var(--accent-color)]' : 'bg-[var(--bg-tertiary)]'}`}
-                    >
-                        <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${soundSettings.playSounds ? 'translate-x-6' : 'translate-x-1'}`} />
-                    </button>
-                </div>
-            </section>
-        </>
-    );
-};
-
-const AppsSettingsPane: React.FC = () => {
-    const { dockedApps, setDockedApps, openApp, theme } = useContext(AppContext)!;
-    
-    const handlePinToggle = (appId: AppId) => {
-        setDockedApps(prev => {
-            if (prev.includes(appId)) {
-                return prev.filter(id => id !== appId);
-            } else {
-                return [...prev, appId];
-            }
-        });
-    };
-
-    return (
-        <>
-            <h2 className="text-2xl font-bold mb-6">Applications</h2>
-            <div className="space-y-2">
-                {APP_DEFINITIONS.map(app => (
-                    <div key={app.id} className="flex items-center justify-between p-2 rounded-md hover:bg-[var(--bg-tertiary)]">
-                        <div className="flex items-center gap-4 cursor-pointer" onClick={() => openApp(app.id)}>
-                            <app.icon className="w-8 h-8 flex-shrink-0" />
-                            <span className="font-semibold">{app.name}</span>
-                        </div>
-                        <button 
-                            onClick={() => handlePinToggle(app.id)}
-                            style={{ 
-                                backgroundColor: dockedApps.includes(app.id) ? 'transparent' : theme.accentColor,
-                                color: dockedApps.includes(app.id) ? theme.accentColor : 'white',
-                                borderColor: theme.accentColor,
-                            }}
-                            className="text-xs font-semibold px-3 py-1 rounded-full border transition-colors"
-                        >
-                            {dockedApps.includes(app.id) ? 'Unpin' : 'Pin to Taskbar'}
-                        </button>
-                    </div>
-                ))}
-            </div>
-        </>
-    );
-};
-
-export const Settings: React.FC = () => {
-    const [activeTab, setActiveTab] = useState('appearance');
-    const { theme } = useContext(AppContext)!;
-    
-    const settingsTabs = [
-        { id: 'appearance', label: 'Appearance', icon: PaintBrushIcon },
-        { id: 'sounds', label: 'Sounds', icon: SpeakerIcon },
-        { id: 'apps', label: 'Apps', icon: AppsIcon },
-    ];
-
-    const renderContent = () => {
-        switch (activeTab) {
-            case 'appearance':
-                return <AppearanceSettings />;
-            case 'sounds':
-                return <SoundSettingsPane />;
-            case 'apps':
-                return <AppsSettingsPane />;
-            default:
-                return <AppearanceSettings />;
-        }
-    };
-    
-    return (
-        <div className="h-full flex text-[var(--text-primary)]">
-            <nav className="w-48 flex-shrink-0 p-2 border-r border-[var(--border-color)]" aria-label="Settings categories">
-                <ul className="space-y-1">
-                    {settingsTabs.map(tab => (
-                        <li key={tab.id}>
-                            <button
-                                onClick={() => setActiveTab(tab.id)}
-                                style={activeTab === tab.id ? { backgroundColor: theme.accentColor, color: 'white' } : {}}
-                                className="w-full flex items-center gap-3 p-2 text-sm rounded-md font-semibold hover:bg-[var(--bg-tertiary)] text-left"
-                                aria-current={activeTab === tab.id ? 'page' : undefined}
-                            >
-                                <tab.icon className="w-5 h-5 flex-shrink-0" />
-                                <span>{tab.label}</span>
-                            </button>
-                        </li>
-                    ))}
-                </ul>
-            </nav>
-            <main className="flex-grow p-6 overflow-y-auto">
-                {renderContent()}
-            </main>
-        </div>
-    );
-};
-
 
 // --- Text Editor ---
-export const TextEditor: React.FC<{ file?: FileSystemNode }> = ({ file }) => {
-    const { fsDispatch, theme } = useContext(AppContext)!;
-    const [content, setContent] = useState(file?.content || '');
-    const [isDirty, setIsDirty] = useState(false);
+export const TextEditor: React.FC<{ file?: FileSystemNode, title?: string }> = ({ file: initialFile, title }) => {
+    const { fsDispatch } = useContext(AppContext)!;
+    const [content, setContent] = useState(initialFile?.content || '');
+    const [isSaved, setIsSaved] = useState(true);
 
-    useEffect(() => {
-        const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-            if (isDirty) {
-                e.preventDefault();
-                e.returnValue = '';
-            }
-        };
-        window.addEventListener('beforeunload', handleBeforeUnload);
-        return () => window.removeEventListener('beforeunload', handleBeforeUnload);
-    }, [isDirty]);
-    
     const handleSave = () => {
-        if (file) {
-            fsDispatch({ type: 'UPDATE_NODE', payload: { nodeId: file.id, updates: { content, size: new Blob([content]).size } } });
-            setIsDirty(false);
+        if (initialFile) {
+            fsDispatch({
+                type: 'UPDATE_NODE',
+                payload: {
+                    nodeId: initialFile.id,
+                    updates: { content, size: new Blob([content]).size },
+                },
+            });
+            setIsSaved(true);
         }
     };
-    
-    const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-        setContent(e.target.value);
-        if (!isDirty) setIsDirty(true);
-    };
+
+    useEffect(() => {
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if (e.ctrlKey && e.key === 's') {
+                e.preventDefault();
+                handleSave();
+            }
+        };
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [handleSave]);
 
     return (
-        <div className="h-full flex flex-col bg-transparent">
-            {file && (
-                 <div className="flex-shrink-0 p-2 border-b border-[var(--border-color)]">
-                    <button 
-                        onClick={handleSave} 
-                        style={{ backgroundColor: isDirty ? theme.accentColor : undefined }}
-                        className={`px-3 py-1 rounded-md text-sm transition-colors ${isDirty ? 'text-white hover:opacity-90' : 'bg-gray-600 text-gray-400 cursor-not-allowed'}`}
-                        disabled={!isDirty}>
-                        Save {isDirty && '*'}
-                    </button>
-                 </div>
-            )}
-             <label htmlFor="text-editor-area" className="sr-only">
-                {file ? `Editing ${file.name}` : 'Text Editor'}
-            </label>
+        <div className="h-full flex flex-col bg-stone-900 text-gray-200 font-mono">
             <textarea
-                id="text-editor-area"
                 value={content}
-                onChange={handleChange}
-                className="flex-grow w-full h-full bg-transparent text-[var(--text-primary)] p-4 resize-none focus:outline-none font-mono"
+                onChange={(e) => { setContent(e.target.value); setIsSaved(false); }}
+                className="w-full h-full p-4 bg-transparent resize-none focus:outline-none"
                 placeholder="Start typing..."
             />
+            <div className="flex-shrink-0 p-1 bg-stone-800 text-xs flex justify-between items-center">
+                <span>{initialFile?.name || 'Unsaved File'}</span>
+                <span className={`${isSaved ? 'text-green-400' : 'text-yellow-400'}`}>{isSaved ? 'Saved' : 'Unsaved Changes'}</span>
+            </div>
         </div>
     );
 };
@@ -1429,62 +1294,106 @@ export const TextEditor: React.FC<{ file?: FileSystemNode }> = ({ file }) => {
 // --- Calculator ---
 export const Calculator: React.FC = () => {
     const [display, setDisplay] = useState('0');
-    const [expression, setExpression] = useState('');
+    const [currentValue, setCurrentValue] = useState<number | null>(null);
+    const [operator, setOperator] = useState<string | null>(null);
+    const [waitingForOperand, setWaitingForOperand] = useState(false);
 
-    const handleInput = (char: string) => {
-        if (display === '0' && char !== '.') {
-            setDisplay(char);
+    const inputDigit = (digit: string) => {
+        if (waitingForOperand) {
+            setDisplay(digit);
+            setWaitingForOperand(false);
         } else {
-            setDisplay(display + char);
+            setDisplay(display === '0' ? digit : display + digit);
         }
-    };
-    
-    const handleOperator = (op: string) => {
-        setExpression(display + op);
-        setDisplay('0');
     };
 
-    const handleEquals = () => {
-        try {
-            // Using Function constructor for safe evaluation
-            const result = new Function(`return ${expression}${display}`)();
+    const inputDecimal = () => {
+        if (waitingForOperand) {
+            setDisplay('0.');
+            setWaitingForOperand(false);
+            return;
+        }
+        if (!display.includes('.')) {
+            setDisplay(display + '.');
+        }
+    };
+
+    const clearDisplay = () => {
+        setDisplay('0');
+        setCurrentValue(null);
+        setOperator(null);
+        setWaitingForOperand(false);
+    };
+
+    const performOperation = (nextOperator: string) => {
+        const inputValue = parseFloat(display);
+
+        if (currentValue === null) {
+            setCurrentValue(inputValue);
+        } else if (operator) {
+            const result = calculate(currentValue, inputValue, operator);
+            setCurrentValue(result);
             setDisplay(String(result));
-            setExpression('');
-        } catch (error) {
-            setDisplay('Error');
+        }
+
+        setWaitingForOperand(true);
+        setOperator(nextOperator);
+    };
+
+    const calculate = (firstOperand: number, secondOperand: number, op: string) => {
+        switch (op) {
+            case '+': return firstOperand + secondOperand;
+            case '-': return firstOperand - secondOperand;
+            case '*': return firstOperand * secondOperand;
+            case '/': return firstOperand / secondOperand;
+            case '=': return secondOperand;
+            default: return secondOperand;
         }
     };
     
-    const handleClear = () => {
-        setDisplay('0');
-        setExpression('');
+    const handleEquals = () => {
+        const inputValue = parseFloat(display);
+        if (operator && currentValue !== null) {
+            const result = calculate(currentValue, inputValue, operator);
+            setCurrentValue(result);
+            setDisplay(String(result));
+            setOperator(null);
+        }
     };
 
     const buttons = [
-        '7', '8', '9', '/',
-        '4', '5', '6', '*',
-        '1', '2', '3', '-',
-        '0', '.', '=', '+'
+        ['AC', '±', '%', '/'],
+        ['7', '8', '9', '*'],
+        ['4', '5', '6', '-'],
+        ['1', '2', '3', '+'],
+        ['0', '.', '=']
     ];
 
-    const handleButtonClick = (btn: string) => {
-        if (!isNaN(Number(btn)) || btn === '.') {
-            handleInput(btn);
-        } else if (btn === '=') {
-            handleEquals();
-        } else {
-            handleOperator(btn);
-        }
+    const handleClick = (btn: string) => {
+        if (/\d/.test(btn)) inputDigit(btn);
+        else if (btn === '.') inputDecimal();
+        else if (btn === 'AC') clearDisplay();
+        else if (btn === '=') handleEquals();
+        else performOperation(btn);
     };
-    
+
     return (
-        <div className="h-full flex flex-col bg-gray-800 p-4 text-white">
-            <div role="status" aria-live="polite" className="flex-grow bg-gray-700 rounded-lg p-4 text-right text-4xl mb-4 break-all">{display}</div>
+        <div className="h-full flex flex-col bg-gray-800 text-white p-2">
+            <div className="flex-grow flex items-end justify-end p-4 bg-gray-900 rounded-md mb-2">
+                <span className="text-5xl font-light truncate">{display}</span>
+            </div>
             <div className="grid grid-cols-4 gap-2">
-                <button onClick={handleClear} className="col-span-4 p-4 bg-gray-600 rounded-lg hover:bg-gray-500 text-2xl">C</button>
-                {buttons.map(btn => (
-                    <button key={btn} onClick={() => handleButtonClick(btn)}
-                        className={`p-4 rounded-lg text-2xl ${'/*-+='.includes(btn) ? 'bg-orange-500 hover:bg-orange-400' : 'bg-gray-600 hover:bg-gray-500'}`}>
+                {buttons.flat().map((btn, i) => (
+                    <button
+                        key={btn}
+                        onClick={() => handleClick(btn)}
+                        className={`
+                            p-4 text-2xl rounded-lg focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-800
+                            ${btn === '0' ? 'col-span-2' : ''}
+                            ${['/', '*', '-', '+', '='].includes(btn) ? 'bg-orange-500 hover:bg-orange-400' : ''}
+                            ${['AC', '±', '%'].includes(btn) ? 'bg-gray-600 hover:bg-gray-500' : 'bg-gray-700 hover:bg-gray-600'}
+                        `}
+                    >
                         {btn}
                     </button>
                 ))}
@@ -1493,73 +1402,145 @@ export const Calculator: React.FC = () => {
     );
 };
 
+// --- Settings ---
+export const Settings: React.FC = () => {
+    const { theme, setTheme, wallpaper, setWallpaper, soundSettings, setSoundSettings } = useContext(AppContext)!;
+    const [tempWallpaper, setTempWallpaper] = useState(wallpaper);
+
+    const handleWallpaperApply = () => setWallpaper(tempWallpaper);
+    const handleAccentColorChange = (color: string) => setTheme(prev => ({ ...prev, accentColor: color }));
+    const handleModeToggle = () => setTheme(prev => ({ ...prev, mode: prev.mode === 'dark' ? 'light' : 'dark' }));
+
+    const colorSwatches = ['#3b82f6', '#ef4444', '#f97316', '#eab308', '#22c55e', '#14b8a6', '#8b5cf6', '#ec4899'];
+    
+    return (
+        <div className="h-full flex text-[var(--text-primary)]">
+            <nav className="w-48 flex-shrink-0 p-2 border-r border-[var(--border-color)]">
+                <ul className="space-y-1">
+                    <li style={{backgroundColor: theme.accentColor, color: 'white'}} className="p-2 rounded-md flex items-center gap-2"><PaintBrushIcon className="w-5 h-5" /> Appearance</li>
+                    <li className="p-2 rounded-md flex items-center gap-2 text-[var(--text-secondary)] cursor-not-allowed"><SpeakerIcon className="w-5 h-5" /> Sound</li>
+                </ul>
+            </nav>
+            <main className="flex-grow p-6 overflow-y-auto">
+                <h2 className="text-2xl font-bold mb-6">Appearance</h2>
+                
+                <section>
+                    <h3 className="text-lg font-semibold mb-2">Accent Color</h3>
+                    <div className="flex flex-wrap gap-3">
+                        {colorSwatches.map(color => (
+                            <button key={color} style={{ backgroundColor: color }} onClick={() => handleAccentColorChange(color)}
+                                className={`w-8 h-8 rounded-full transition-transform transform hover:scale-110 ${theme.accentColor === color ? 'ring-2 ring-offset-2 ring-offset-[var(--bg-primary)] ring-current' : ''}`}
+                                aria-label={`Set accent color to ${color}`}
+                            />
+                        ))}
+                    </div>
+                </section>
+
+                <section className="mt-8">
+                    <h3 className="text-lg font-semibold mb-2">Mode</h3>
+                    <button onClick={handleModeToggle} className="px-4 py-2 rounded-md bg-[var(--bg-tertiary)] hover:bg-[var(--bg-secondary)]">{theme.mode === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}</button>
+                </section>
+
+                <section className="mt-8">
+                    <h3 className="text-lg font-semibold mb-2">Wallpaper</h3>
+                    <div className="flex items-center gap-2">
+                        <input
+                            type="text"
+                            value={tempWallpaper}
+                            onChange={e => setTempWallpaper(e.target.value)}
+                            className="flex-grow bg-[var(--bg-tertiary)] px-2 py-1.5 rounded-md border border-[var(--border-color)] focus:outline-none focus:ring-1"
+                            placeholder="Enter image URL"
+                        />
+                        <button onClick={handleWallpaperApply} className="px-4 py-1.5 rounded-md text-white" style={{backgroundColor: theme.accentColor}}>Apply</button>
+                    </div>
+                    <div className="mt-4 p-2 border border-[var(--border-color)] rounded-md">
+                        <img src={tempWallpaper} alt="Wallpaper preview" className="w-full h-32 object-cover rounded" />
+                    </div>
+                </section>
+            </main>
+        </div>
+    );
+};
+
 // --- Browser ---
 export const Browser: React.FC = () => {
     const [url, setUrl] = useState('https://www.google.com/webhp?igu=1');
     const [iframeSrc, setIframeSrc] = useState(url);
-
+    
     const handleGo = () => {
         let finalUrl = url;
-        if (!url.startsWith('http')) {
-            finalUrl = `https://www.google.com/search?q=${encodeURIComponent(url)}`;
+        if (!/^https?:\/\//i.test(url)) {
+            finalUrl = 'https://' + url;
         }
         setIframeSrc(finalUrl);
     };
 
     return (
-        <div className="h-full flex flex-col bg-transparent">
-            <div className="flex-shrink-0 p-2 border-b border-[var(--border-color)] flex gap-2">
-                <label htmlFor="browser-url-input" className="sr-only">Website URL</label>
-                <input id="browser-url-input" type="text" value={url} onChange={(e) => setUrl(e.target.value)} onKeyPress={e => e.key === 'Enter' && handleGo()}
-                    className="flex-grow bg-[var(--bg-tertiary)] text-[var(--text-primary)] px-3 py-1 rounded-md border border-[var(--border-color)] focus:outline-none"/>
-                <button onClick={handleGo} className="px-3 py-1 bg-blue-600 text-white rounded-md text-sm hover:bg-blue-500">Go</button>
+        <div className="h-full flex flex-col bg-gray-100">
+            <div className="flex-shrink-0 p-2 bg-gray-200 border-b border-gray-300 flex items-center gap-2">
+                <input
+                    type="text"
+                    value={url}
+                    onChange={(e) => setUrl(e.target.value)}
+                    onKeyPress={(e) => e.key === 'Enter' && handleGo()}
+                    className="flex-grow bg-white px-2 py-1 rounded border border-gray-300 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    placeholder="Enter URL"
+                />
+                <button onClick={handleGo} className="px-4 py-1 rounded bg-blue-500 text-white hover:bg-blue-600">Go</button>
             </div>
-            <iframe src={iframeSrc} title="Browser Content" className="w-full h-full border-none" sandbox="allow-scripts allow-same-origin allow-forms" />
+            <div className="flex-grow border-0">
+                <iframe
+                    src={iframeSrc}
+                    title="Browser"
+                    className="w-full h-full border-0"
+                    sandbox="allow-forms allow-modals allow-pointer-lock allow-popups allow-popups-to-escape-sandbox allow-same-origin allow-scripts allow-top-navigation"
+                    onError={() => console.error("Error loading iframe content.")}
+                />
+            </div>
         </div>
     );
 };
 
 // --- Notes ---
 export const Notes: React.FC = () => {
-    const { fsDispatch, fileSystem } = useContext(AppContext)!;
-    const notesFile = useMemo(() => {
-        let file = null;
-        const docs = fileSystem.children?.find(c => c.id === 'documents');
-        if (docs?.children) {
-            file = docs.children.find(c => c.id === 'notes-file');
-        }
-        return file;
-    }, [fileSystem]);
+    const { fileSystem, fsDispatch } = useContext(AppContext)!;
     
-    const [content, setContent] = useState(notesFile?.content || '');
+    const findNoteFile = useCallback(() => {
+        const documents = fileSystem.children?.find(c => c.id === 'documents');
+        return documents?.children?.find(c => c.id === 'notes-file');
+    }, [fileSystem]);
+
+    const [noteFile, setNoteFile] = useState(findNoteFile());
+    const [content, setContent] = useState(noteFile?.content || '');
 
     useEffect(() => {
         const timeoutId = setTimeout(() => {
-            if (notesFile && content !== notesFile.content) {
+            if (noteFile && content !== noteFile.content) {
                 fsDispatch({
                     type: 'UPDATE_NODE',
-                    payload: { nodeId: notesFile.id, updates: { content, size: new Blob([content]).size } }
+                    payload: { nodeId: noteFile.id, updates: { content } }
                 });
             }
         }, 500); // Debounce saving
         return () => clearTimeout(timeoutId);
-    }, [content, notesFile, fsDispatch]);
+    }, [content, noteFile, fsDispatch]);
 
     return (
-        <textarea
-            aria-label="Notes"
-            value={content}
-            onChange={(e) => setContent(e.target.value)}
-            className="w-full h-full bg-yellow-100 text-gray-800 p-4 resize-none focus:outline-none text-lg leading-loose"
-            placeholder="Your notes are saved automatically..."
-        />
+        <div className="h-full bg-yellow-100">
+            <textarea
+                value={content}
+                onChange={(e) => setContent(e.target.value)}
+                className="w-full h-full p-4 bg-transparent text-gray-800 resize-none focus:outline-none font-serif leading-loose"
+                placeholder="Start writing your notes here..."
+            />
+        </div>
     );
 };
 
 // --- Media Viewer ---
 export const MediaViewer: React.FC<{ file: FileSystemNode }> = ({ file }) => {
     return (
-        <div className="h-full w-full flex items-center justify-center bg-black p-4">
+        <div className="h-full flex items-center justify-center bg-black/80 p-4">
             <img src={file.content} alt={file.name} className="max-w-full max-h-full object-contain" />
         </div>
     );
@@ -1567,26 +1548,35 @@ export const MediaViewer: React.FC<{ file: FileSystemNode }> = ({ file }) => {
 
 // --- Properties Viewer ---
 export const PropertiesViewer: React.FC<{ file: FileSystemNode }> = ({ file }) => {
-    const properties = [
-        { name: 'Name', value: file.name },
-        { name: 'Type', value: file.type === 'folder' ? 'Folder' : (file.mimeType || 'File') },
-        { name: 'Size', value: file.size ? `${(file.size / 1024).toFixed(2)} KB (${file.size} bytes)` : 'N/A' },
-        { name: 'Created', value: file.createdAt ? new Date(file.createdAt).toLocaleString() : 'N/A' },
-        { name: 'ID', value: file.id },
-    ];
+    const { theme } = useContext(AppContext)!;
+    const Icon = file.type === 'folder' ? FolderIcon : FileTextIcon;
     return (
-        <div className="p-4 text-sm text-[var(--text-primary)]">
-            <h3 className="font-bold text-lg mb-4">{file.name}</h3>
-            <table className="w-full" aria-label={`Properties for ${file.name}`}>
-                <tbody>
-                    {properties.map(prop => (
-                        <tr key={prop.name} className="border-b border-[var(--border-color)]">
-                            <td className="py-2 pr-2 font-semibold">{prop.name}</td>
-                            <td className="py-2 break-all">{prop.value}</td>
-                        </tr>
-                    ))}
-                </tbody>
-            </table>
+        <div className="h-full p-4 bg-[var(--bg-secondary)] text-sm text-[var(--text-primary)] overflow-y-auto">
+            <div className="flex flex-col items-center mb-4">
+                <Icon className="w-16 h-16" />
+                <h2 className="text-lg font-semibold mt-2 break-all">{file.name}</h2>
+            </div>
+            <div className="space-y-2">
+                <div className="flex justify-between">
+                    <span className="font-semibold">Type:</span>
+                    <span>{file.type === 'file' ? (file.mimeType || 'File') : 'Folder'}</span>
+                </div>
+                {file.size !== undefined && (
+                    <div className="flex justify-between">
+                        <span className="font-semibold">Size:</span>
+                        <span>{(file.size / 1024).toFixed(2)} KB ({file.size} bytes)</span>
+                    </div>
+                )}
+                 {file.createdAt && (
+                    <div className="flex justify-between">
+                        <span className="font-semibold">Created:</span>
+                        <span>{new Date(file.createdAt).toLocaleString()}</span>
+                    </div>
+                )}
+                <div className="pt-2">
+                     <button className="w-full py-2 rounded-md text-white" style={{backgroundColor: theme.accentColor}}>OK</button>
+                </div>
+            </div>
         </div>
     );
 };
