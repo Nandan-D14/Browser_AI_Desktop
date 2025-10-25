@@ -1,6 +1,7 @@
+
 import React, { useState, useCallback, useMemo, createContext, useReducer, useRef, useEffect, useContext } from 'react';
 import { AppContextType, AppDefinition, AppId, WindowInstance, FileSystemNode, FileSystemAction, Theme, Notification, SoundSettings } from './types';
-import { APP_DEFINITIONS, StartIcon, initialFileSystem, FolderIcon, FileTextIcon, ImageIcon, BellIcon } from './constants';
+import { APP_DEFINITIONS, initialFileSystem, FolderIcon, FileTextIcon, ImageIcon, BellIcon, AppsIcon } from './constants';
 import WindowComponent from './components/Window';
 import { AppRenderer, ContextMenu } from './components/Applications';
 
@@ -110,91 +111,21 @@ const NotificationPanel: React.FC<{ onClose: () => void }> = ({ onClose }) => {
 
 
 const TopMenuBar: React.FC = () => {
-    const { windows, getAppDefinition, activeWindowId, openApp, fileSystem, dockedApps, setDockedApps, theme, notifications, markNotificationsAsRead } = useContext(AppContext)!;
+    const { windows, getAppDefinition, activeWindowId, notifications, markNotificationsAsRead } = useContext(AppContext)!;
     const [time, setTime] = useState(new Date());
-    const [isMenuOpen, setIsMenuOpen] = useState(false);
     const [isNotificationPanelOpen, setIsNotificationPanelOpen] = useState(false);
-    const [searchQuery, setSearchQuery] = useState('');
-    const [menuContextMenu, setMenuContextMenu] = useState<{x: number, y: number, app: AppDefinition} | null>(null);
-    const menuRef = useRef<HTMLDivElement>(null);
-
+    
     const activeWindow = windows.find(w => w.id === activeWindowId);
     const activeAppDef = activeWindow ? getAppDefinition(activeWindow.appId) : null;
     const activeAppName = activeAppDef ? activeAppDef.name : "Desktop";
     
     const unreadCount = useMemo(() => notifications.filter(n => !n.read).length, [notifications]);
-    
-    const [searchResults, setSearchResults] = useState<AppDefinition[]>([]);
 
     useEffect(() => {
         const timer = setInterval(() => setTime(new Date()), 1000 * 30);
         return () => clearInterval(timer);
     }, []);
 
-    useEffect(() => {
-        if (!searchQuery.trim()) {
-            setSearchResults([]);
-            return;
-        }
-        const query = searchQuery.toLowerCase();
-
-        const filteredApps = APP_DEFINITIONS.filter(app =>
-            app.name.toLowerCase().includes(query)
-        );
-        setSearchResults(filteredApps);
-    }, [searchQuery]);
-
-    useEffect(() => {
-        const handleClickOutside = (event: MouseEvent) => {
-            if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
-                setIsMenuOpen(false);
-                setSearchQuery('');
-            }
-        };
-        document.addEventListener('mousedown', handleClickOutside);
-        return () => document.removeEventListener('mousedown', handleClickOutside);
-    }, []);
-    
-    const handleAboutClick = () => {
-        const readmeFile = fileSystem.children?.find(c => c.id === 'readme');
-        if (readmeFile) {
-            openApp('text_editor', { file: readmeFile, title: "About This OS" });
-        }
-        setIsMenuOpen(false);
-        setSearchQuery('');
-    };
-
-    const handleMenuToggle = () => {
-        const wasOpen = isMenuOpen;
-        setIsMenuOpen(!wasOpen);
-        if (wasOpen) {
-            setSearchQuery('');
-        }
-    };
-
-    const handlePinToggle = (appId: AppId) => {
-        setDockedApps(prev => {
-            if (prev.includes(appId)) {
-                return prev.filter(id => id !== appId);
-            } else {
-                return [...prev, appId];
-            }
-        });
-        setMenuContextMenu(null);
-    };
-
-    const menuContextItems = menuContextMenu ? [
-        { 
-            label: dockedApps.includes(menuContextMenu.app.id) ? 'Unpin from Taskbar' : 'Pin to Taskbar', 
-            action: () => handlePinToggle(menuContextMenu.app.id)
-        },
-        { label: 'Open', action: () => openApp(menuContextMenu.app.id) }
-    ] : [];
-
-    const accentHoverStyle = {
-        '--hover-color': theme.accentColor
-    } as React.CSSProperties;
-    
     const handleNotificationToggle = () => {
         if (!isNotificationPanelOpen) {
             markNotificationsAsRead();
@@ -205,69 +136,6 @@ const TopMenuBar: React.FC = () => {
     return (
         <header role="menubar" className="absolute top-0 left-0 right-0 h-7 bg-[var(--topbar-bg)] backdrop-blur-3xl flex items-center px-4 z-[100000] justify-between text-[var(--text-primary)] text-sm font-semibold border-b border-[var(--border-color)]">
             <div className="flex items-center gap-4">
-                <div className="relative" ref={menuRef}>
-                    <button onClick={handleMenuToggle} aria-haspopup="true" aria-expanded={isMenuOpen} aria-label="Start menu">
-                        <StartIcon className="w-5 h-5" style={{ stroke: 'var(--text-primary)'}} />
-                    </button>
-                    {isMenuOpen && (
-                        <div role="menu" className="absolute top-full left-0 mt-1 w-80 bg-[var(--bg-secondary)] backdrop-blur-xl rounded-lg shadow-lg border border-[var(--border-color)] text-sm" onClick={() => setMenuContextMenu(null)}>
-                           <div className="p-2 border-b border-[var(--border-color)]">
-                                <input
-                                    type="text"
-                                    placeholder="Type to search..."
-                                    className="w-full bg-[var(--bg-tertiary)] text-[var(--text-primary)] placeholder-[var(--text-secondary)] px-2 py-1.5 rounded-md border border-[var(--border-color)] focus:outline-none focus:ring-1"
-                                    style={{'--tw-ring-color': theme.accentColor} as React.CSSProperties}
-                                    value={searchQuery}
-                                    onChange={(e) => setSearchQuery(e.target.value)}
-                                    autoFocus
-                                    aria-label="Search applications"
-                                />
-                           </div>
-                           <ul className="py-1 max-h-[28rem] overflow-y-auto text-[var(--text-primary)]" role="none">
-                                {!searchQuery.trim() ? (
-                                    <>
-                                        {APP_DEFINITIONS.map(app => (
-                                            <li 
-                                                key={app.id}
-                                                onClick={() => { openApp(app.id); handleMenuToggle(); }} 
-                                                onContextMenu={(e) => { e.preventDefault(); setMenuContextMenu({ x: e.clientX, y: e.clientY, app })}}
-                                                className="px-3 py-2 hover:bg-[var(--hover-color)] cursor-pointer flex items-center gap-3"
-                                                style={accentHoverStyle}
-                                                role="menuitem"
-                                            >
-                                                <app.icon className="w-6 h-6 flex-shrink-0" aria-hidden="true" />
-                                                <span>{app.name}</span>
-                                            </li>
-                                        ))}
-                                        <li className='border-t border-[var(--border-color)] mt-1 pt-1' role="separator">
-                                            <div onClick={handleAboutClick} style={accentHoverStyle} className="px-3 py-2 hover:bg-[var(--hover-color)] cursor-pointer flex items-center gap-3" role="menuitem">About This OS</div>
-                                        </li>
-                                    </>
-                                ) : (
-                                    <>
-                                        {searchResults.length > 0 ? (
-                                            searchResults.map(app => (
-                                                <li 
-                                                    key={app.id}
-                                                    onClick={() => { openApp(app.id); handleMenuToggle(); }} 
-                                                    onContextMenu={(e) => { e.preventDefault(); setMenuContextMenu({ x: e.clientX, y: e.clientY, app }); }}
-                                                    className="px-3 py-2 hover:bg-[var(--hover-color)] cursor-pointer flex items-center gap-3"
-                                                    style={accentHoverStyle}
-                                                    role="menuitem"
-                                                >
-                                                    <app.icon className="w-6 h-6 flex-shrink-0" aria-hidden="true"/>
-                                                    <span>{app.name}</span>
-                                                </li>
-                                            ))
-                                        ) : (
-                                            <li className="px-3 py-2 text-[var(--text-secondary)] text-center">No applications found for "{searchQuery}"</li>
-                                        )}
-                                    </>
-                                )}
-                           </ul>
-                        </div>
-                    )}
-                </div>
                 <div>{activeAppName}</div>
             </div>
             <div className="flex items-center gap-4">
@@ -282,7 +150,6 @@ const TopMenuBar: React.FC = () => {
                     {isNotificationPanelOpen && <NotificationPanel onClose={() => setIsNotificationPanelOpen(false)} />}
                  </div>
             </div>
-            {menuContextMenu && <ContextMenu x={menuContextMenu.x} y={menuContextMenu.y} items={menuContextItems} onClose={() => setMenuContextMenu(null)} />}
         </header>
     )
 };
@@ -360,13 +227,84 @@ const Taskbar: React.FC = () => {
         getAppDefinition, 
         windows, 
         focusApp, 
-        setDockedApps 
+        setDockedApps,
+        fileSystem
     } = useContext(AppContext)!;
     const [input, setInput] = useState('');
     const [taskbarContextMenu, setTaskbarContextMenu] = useState<{ x: number, y: number, appId: AppId } | null>(null);
     const [hoveredApp, setHoveredApp] = useState<{ appId: AppId, ref: React.RefObject<HTMLDivElement> } | null>(null);
     const hoverTimeoutRef = useRef<number | null>(null);
     const iconRefs = useRef<Map<AppId, React.RefObject<HTMLDivElement>>>(new Map());
+
+    const [isMenuOpen, setIsMenuOpen] = useState(false);
+    const [searchQuery, setSearchQuery] = useState('');
+    const [menuContextMenu, setMenuContextMenu] = useState<{x: number, y: number, app: AppDefinition} | null>(null);
+    const menuRef = useRef<HTMLDivElement>(null);
+    const [searchResults, setSearchResults] = useState<AppDefinition[]>([]);
+
+    useEffect(() => {
+        if (!searchQuery.trim()) {
+            setSearchResults([]);
+            return;
+        }
+        const query = searchQuery.toLowerCase();
+
+        const filteredApps = APP_DEFINITIONS.filter(app =>
+            app.name.toLowerCase().includes(query)
+        );
+        setSearchResults(filteredApps);
+    }, [searchQuery]);
+
+    useEffect(() => {
+        const handleClickOutside = (event: MouseEvent) => {
+            if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+                setIsMenuOpen(false);
+                setSearchQuery('');
+            }
+        };
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, []);
+    
+    const handleAboutClick = () => {
+        const readmeFile = fileSystem.children?.find(c => c.id === 'readme');
+        if (readmeFile) {
+            openApp('text_editor', { file: readmeFile, title: "About This OS" });
+        }
+        setIsMenuOpen(false);
+        setSearchQuery('');
+    };
+
+    const handleMenuToggle = () => {
+        const wasOpen = isMenuOpen;
+        setIsMenuOpen(!wasOpen);
+        if (wasOpen) {
+            setSearchQuery('');
+        }
+    };
+
+    const handlePinToggle = (appId: AppId) => {
+        setDockedApps(prev => {
+            if (prev.includes(appId)) {
+                return prev.filter(id => id !== appId);
+            } else {
+                return [...prev, appId];
+            }
+        });
+        setMenuContextMenu(null);
+    };
+
+    const menuContextItems = menuContextMenu ? [
+        { 
+            label: dockedApps.includes(menuContextMenu.app.id) ? 'Unpin from Taskbar' : 'Pin to Taskbar', 
+            action: () => handlePinToggle(menuContextMenu.app.id)
+        },
+        { label: 'Open', action: () => openApp(menuContextMenu.app.id) }
+    ] : [];
+
+    const accentHoverStyle = {
+        '--hover-color': theme.accentColor
+    } as React.CSSProperties;
 
     const taskbarApps = useMemo(() => {
         const runningAppIds = windows.map(w => w.appId);
@@ -448,9 +386,76 @@ const Taskbar: React.FC = () => {
                     role="toolbar"
                     aria-label="Taskbar"
                     className="flex items-center bg-black/25 backdrop-blur-2xl p-2 rounded-full border border-white/20 shadow-2xl shadow-black/50 transition-all duration-300 ease-in-out focus-within:shadow-lg focus-within:shadow-blue-500/50 focus-within:border-white/30"
-                    onClick={() => setTaskbarContextMenu(null)}
+                    onClick={() => { setTaskbarContextMenu(null); setMenuContextMenu(null); }}
                     onMouseLeave={hidePreview}
                 >
+                     <div className="relative group px-1" ref={menuRef}>
+                        <button 
+                            onClick={handleMenuToggle} 
+                            aria-haspopup="true" aria-expanded={isMenuOpen} aria-label="App launcher"
+                            className="p-2 rounded-full hover:bg-white/20 transition-all transform group-hover:scale-110"
+                        >
+                            <AppsIcon className="w-8 h-8" />
+                        </button>
+                         {isMenuOpen && (
+                            <div role="menu" className="absolute bottom-full left-0 mb-2 w-80 bg-[var(--bg-secondary)] backdrop-blur-xl rounded-lg shadow-lg border border-[var(--border-color)] text-sm" >
+                               <div className="p-2 border-b border-[var(--border-color)]">
+                                    <input
+                                        type="text"
+                                        placeholder="Type to search..."
+                                        className="w-full bg-[var(--bg-tertiary)] text-[var(--text-primary)] placeholder-[var(--text-secondary)] px-2 py-1.5 rounded-md border border-[var(--border-color)] focus:outline-none focus:ring-1"
+                                        style={{'--tw-ring-color': theme.accentColor} as React.CSSProperties}
+                                        value={searchQuery}
+                                        onChange={(e) => setSearchQuery(e.target.value)}
+                                        autoFocus
+                                        aria-label="Search applications"
+                                    />
+                               </div>
+                               <ul className="py-1 max-h-[28rem] overflow-y-auto text-[var(--text-primary)]" role="none">
+                                    {!searchQuery.trim() ? (
+                                        <>
+                                            {APP_DEFINITIONS.map(app => (
+                                                <li 
+                                                    key={app.id}
+                                                    onClick={() => { openApp(app.id); handleMenuToggle(); }} 
+                                                    onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setMenuContextMenu({ x: e.clientX, y: e.clientY, app })}}
+                                                    className="px-3 py-2 hover:bg-[var(--hover-color)] cursor-pointer flex items-center gap-3"
+                                                    style={accentHoverStyle}
+                                                    role="menuitem"
+                                                >
+                                                    <app.icon className="w-6 h-6 flex-shrink-0" aria-hidden="true" />
+                                                    <span>{app.name}</span>
+                                                </li>
+                                            ))}
+                                            <li className='border-t border-[var(--border-color)] mt-1 pt-1' role="separator">
+                                                <div onClick={handleAboutClick} style={accentHoverStyle} className="px-3 py-2 hover:bg-[var(--hover-color)] cursor-pointer flex items-center gap-3" role="menuitem">About This OS</div>
+                                            </li>
+                                        </>
+                                    ) : (
+                                        <>
+                                            {searchResults.length > 0 ? (
+                                                searchResults.map(app => (
+                                                    <li 
+                                                        key={app.id}
+                                                        onClick={() => { openApp(app.id); handleMenuToggle(); }} 
+                                                        onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setMenuContextMenu({ x: e.clientX, y: e.clientY, app }); }}
+                                                        className="px-3 py-2 hover:bg-[var(--hover-color)] cursor-pointer flex items-center gap-3"
+                                                        style={accentHoverStyle}
+                                                        role="menuitem"
+                                                    >
+                                                        <app.icon className="w-6 h-6 flex-shrink-0" aria-hidden="true"/>
+                                                        <span>{app.name}</span>
+                                                    </li>
+                                                ))
+                                            ) : (
+                                                <li className="px-3 py-2 text-[var(--text-secondary)] text-center">No applications found for "{searchQuery}"</li>
+                                            )}
+                                        </>
+                                    )}
+                               </ul>
+                            </div>
+                        )}
+                    </div>
                     {taskbarApps.map(appDef => {
                         const runningWindows = windows.filter(w => w.appId === appDef.id);
                         const isRunning = runningWindows.length > 0;
@@ -487,8 +492,6 @@ const Taskbar: React.FC = () => {
                             </div>
                         )
                     })}
-                    
-                    {taskbarApps.length > 0 && <div className="w-px h-10 bg-white/20 mx-2" aria-hidden="true" />}
                     
                     <button
                         onClick={handleVoiceClick}
@@ -528,6 +531,7 @@ const Taskbar: React.FC = () => {
                 />
             )}
             {taskbarContextMenu && <ContextMenu x={taskbarContextMenu.x} y={taskbarContextMenu.y} items={taskbarContextItems} onClose={() => setTaskbarContextMenu(null)} />}
+            {menuContextMenu && <ContextMenu x={menuContextMenu.x} y={menuContextMenu.y} items={menuContextItems} onClose={() => setMenuContextMenu(null)} />}
         </>
     );
 };

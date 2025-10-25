@@ -38,9 +38,6 @@ export const ZipIcon = ({ className }: { className?: string, style?: React.CSSPr
     <svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}><path d="M10 4H30L40 14V42C40 43.1046 39.1046 44 38 44H10C8.89543 44 8 43.1046 8 42V6C8 4.89543 8.89543 4 10 4Z" fill="#A5B4FC"></path><path d="M30 4L40 14H32C30.8954 14 30 13.1046 30 12V4Z" fill="#6366F1"></path><rect x="14" y="20" width="20" height="4" fill="#4338CA"></rect><rect x="14" y="28" width="20" height="4" fill="#E0E7FF"></rect><rect x="14" y="36" width="20" height="4" fill="#4338CA"></rect><path d="M22 24H26V28H22V24Z" fill="#E0E7FF"></path></svg>
 );
 // FIX: Updated StartIcon to accept a `style` prop to allow dynamic stroke color. Removed hardcoded stroke colors from paths to allow inheritance. Added a default stroke color to the parent SVG.
-export const StartIcon = ({ className, style }: { className?: string; style?: React.CSSProperties }) => (
-    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className={className} style={style} stroke="white"><path d="M12 2L12 12M12 22L12 12M12 12L2 12L12 12L22 12" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"></path><path d="M12 2C14.3869 3.06328 16.4893 4.60636 18.1213 6.51041C19.7533 8.41445 20.8587 10.7027 21.3252 13.1436" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"></path><path d="M22 12C20.9367 14.3869 19.3936 16.4893 17.4896 18.1213C15.5855 19.7533 13.2973 20.8587 10.8564 21.3252" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"></path><path d="M12 22C9.61314 20.9367 7.51071 19.3936 5.87868 17.4896C4.24665 15.5855 3.14131 13.2973 2.6748 10.8564" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"></path><path d="M2 12C3.06328 9.61314 4.60636 7.51071 6.51041 5.87868C8.41445 4.24665 10.7027 3.14131 13.1436 2.6748" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"></path></svg>
-);
 export const InfoIcon = ({ className }: { className?: string }) => (
     <svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}><circle cx="24" cy="24" r="20" fill="#3B82F6"></circle><path d="M24 16V18" stroke="white" strokeWidth="3" strokeLinecap="round"></path><path d="M24 24V32" stroke="white" strokeWidth="3" strokeLinecap="round"></path></svg>
 );
@@ -101,11 +98,11 @@ export const GoogleDriveIcon = ({ className }: { className?: string }) => (
 
 // --- App Definitions ---
 export const APP_DEFINITIONS: AppDefinition[] = [
-  { id: 'ai_assistant', name: 'AI Assistant', icon: AiIcon, component: AIAssistant, defaultSize: [400, 600], isDefault: true },
+  { id: 'ai_assistant', name: 'AI Assistant', icon: AiIcon, component: AIAssistant, defaultSize: [400, 600] },
   { id: 'file_explorer', name: 'File Explorer', icon: FolderIcon, component: FileExplorer, defaultSize: [700, 500], isDefault: true },
-  { id: 'terminal', name: 'Terminal', icon: TerminalIcon, component: Terminal, defaultSize: [600, 400] },
+  { id: 'terminal', name: 'Terminal', icon: TerminalIcon, component: Terminal, defaultSize: [600, 400], isDefault: true },
   { id: 'settings', name: 'Settings', icon: SettingsIcon, component: Settings, defaultSize: [700, 500] },
-  { id: 'text_editor', name: 'Text Editor', icon: FileTextIcon, component: TextEditor, defaultSize: [600, 500] },
+  { id: 'text_editor', name: 'Text Editor', icon: FileTextIcon, component: TextEditor, defaultSize: [600, 500], isDefault: true },
   { id: 'calculator', name: 'Calculator', icon: CalculatorIcon, component: Calculator, defaultSize: [300, 450] },
   { id: 'browser', name: 'Browser', icon: BrowserIcon, component: Browser, defaultSize: [800, 600] },
   { id: 'notes', name: 'Notes', icon: NoteIcon, component: Notes, defaultSize: [400, 500] },
@@ -195,7 +192,8 @@ To use the Google Drive file import feature, you need to configure Google Cloud 
     - Click "Create Credentials" and select "OAuth client ID".
     - Choose "Web application" as the application type.
     - Add your application's URL to the "Authorized JavaScript origins".
-    - Add the same URL to the "Authorized redirect URIs".
+    - Add the same URL to the "Authorized redirect
+URIs".
 4.  **Configure Environment Variable**:
     - Copy the generated "Client ID".
     - In your development environment, create a variable named \`GOOGLE_CLIENT_ID\` and paste your Client ID as the value.
