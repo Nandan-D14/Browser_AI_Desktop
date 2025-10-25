@@ -382,11 +382,49 @@ const Taskbar: React.FC = () => {
 
     return (
         <>
+            {/* AI Input bar at the bottom center */}
             <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-[100000]">
                 <div 
                     role="toolbar"
-                    aria-label="Taskbar"
+                    aria-label="AI Assistant bar"
                     className="flex items-center bg-black/25 backdrop-blur-2xl p-2 rounded-full border border-white/20 shadow-2xl shadow-black/50 transition-all duration-300 ease-in-out focus-within:shadow-lg focus-within:shadow-blue-500/50 focus-within:border-white/30"
+                >
+                    <button
+                        onClick={handleVoiceClick}
+                        className={`relative flex-shrink-0 p-2 rounded-full transition-colors duration-200 text-white ${isAiListening ? 'bg-red-600' : 'bg-green-600 hover:bg-green-500'}`}
+                        aria-label="Start voice conversation"
+                    >
+                        {isAiListening && <span className="absolute inset-0 bg-red-500 rounded-full animate-ping" aria-hidden="true"></span>}
+                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" x2="12" y1="19" y2="22"></line></svg>
+                    </button>
+                    <input
+                        type="text"
+                        value={input}
+                        onChange={(e) => setInput(e.target.value)}
+                        onKeyPress={(e) => e.key === 'Enter' && handleSubmit()}
+                        className="flex-grow bg-transparent border-none text-white px-4 text-sm focus:outline-none placeholder-gray-400 min-w-[20rem]"
+                        placeholder={isAiListening ? "Listening..." : "Ask AI anything..."}
+                        disabled={isAiListening}
+                        aria-label="Ask AI anything"
+                    />
+                    <button
+                        onClick={handleSubmit}
+                        disabled={isAiListening || !input.trim()}
+                        style={{ backgroundColor: isAiListening || !input.trim() ? '' : theme.accentColor }}
+                        className="flex-shrink-0 p-2 rounded-full hover:opacity-90 disabled:bg-gray-600 disabled:cursor-not-allowed text-white transition-colors duration-200"
+                        aria-label="Send message"
+                    >
+                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+                    </button>
+                </div>
+            </div>
+
+            {/* Main taskbar at the bottom left */}
+            <div className="absolute bottom-4 left-4 z-[100000]">
+                <div 
+                    role="toolbar"
+                    aria-label="Taskbar"
+                    className="flex items-center bg-black/25 backdrop-blur-2xl p-2 rounded-full border border-white/20 shadow-2xl shadow-black/50 transition-all duration-300 ease-in-out"
                     onClick={() => { setTaskbarContextMenu(null); setMenuContextMenu(null); }}
                     onMouseLeave={hidePreview}
                 >
@@ -493,38 +531,9 @@ const Taskbar: React.FC = () => {
                             </div>
                         )
                     })}
-                    
-                    <div className="w-px h-6 bg-white/20 mx-2 self-center"></div>
-                    
-                    <button
-                        onClick={handleVoiceClick}
-                        className={`relative flex-shrink-0 p-2 rounded-full transition-colors duration-200 text-white ${isAiListening ? 'bg-red-600' : 'bg-green-600 hover:bg-green-500'}`}
-                        aria-label="Start voice conversation"
-                    >
-                        {isAiListening && <span className="absolute inset-0 bg-red-500 rounded-full animate-ping" aria-hidden="true"></span>}
-                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" x2="12" y1="19" y2="22"></line></svg>
-                    </button>
-                    <input
-                        type="text"
-                        value={input}
-                        onChange={(e) => setInput(e.target.value)}
-                        onKeyPress={(e) => e.key === 'Enter' && handleSubmit()}
-                        className="flex-grow bg-transparent border-none text-white px-4 text-sm focus:outline-none placeholder-gray-400 min-w-[20rem]"
-                        placeholder={isAiListening ? "Listening..." : "Ask AI anything..."}
-                        disabled={isAiListening}
-                        aria-label="Ask AI anything"
-                    />
-                    <button
-                        onClick={handleSubmit}
-                        disabled={isAiListening || !input.trim()}
-                        style={{ backgroundColor: isAiListening || !input.trim() ? '' : theme.accentColor }}
-                        className="flex-shrink-0 p-2 rounded-full hover:opacity-90 disabled:bg-gray-600 disabled:cursor-not-allowed text-white transition-colors duration-200"
-                        aria-label="Send message"
-                    >
-                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
-                    </button>
                 </div>
             </div>
+
             {hoveredApp && (
                 <TaskbarPreview
                     appId={hoveredApp.appId}

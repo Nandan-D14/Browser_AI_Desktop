@@ -1505,23 +1505,34 @@ export const Browser: React.FC = () => {
 export const Notes: React.FC = () => {
     const { fileSystem, fsDispatch } = useContext(AppContext)!;
     
-    const findNoteFile = useCallback(() => {
+    // Derive the note file from the current file system state. This is always up-to-date.
+    const noteFile = useMemo(() => {
         const documents = fileSystem.children?.find(c => c.id === 'documents');
         return documents?.children?.find(c => c.id === 'notes-file');
     }, [fileSystem]);
 
-    const [noteFile, setNoteFile] = useState(findNoteFile());
+    // Local state for the textarea content.
     const [content, setContent] = useState(noteFile?.content || '');
 
+    // Effect to update local state if the file content changes from an external source (e.g., loaded from storage, another app).
+    useEffect(() => {
+        const fileContent = noteFile?.content || '';
+        if (fileContent !== content) {
+            setContent(fileContent);
+        }
+    }, [noteFile]); // Depends only on noteFile, which is derived from fileSystem.
+
+    // Effect to save (debounce) changes from the textarea back to the file system.
     useEffect(() => {
         const timeoutId = setTimeout(() => {
+            // Only save if the file exists and the content has actually changed.
             if (noteFile && content !== noteFile.content) {
                 fsDispatch({
                     type: 'UPDATE_NODE',
                     payload: { nodeId: noteFile.id, updates: { content } }
                 });
             }
-        }, 500); // Debounce saving
+        }, 500);
         return () => clearTimeout(timeoutId);
     }, [content, noteFile, fsDispatch]);
 
