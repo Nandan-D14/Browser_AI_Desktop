@@ -5,7 +5,7 @@ import { AppContextType, AppDefinition, AppId, WindowInstance, FileSystemNode, F
 import { APP_DEFINITIONS, initialFileSystem, FolderIcon, FileTextIcon, ImageIcon, BellIcon, AppsIcon } from './constants';
 import WindowComponent from './components/Window';
 import { AppRenderer, ContextMenu } from './components/Applications';
-import { auth } from './services/firebase';
+import { auth, initializeFirebase } from './services/firebase';
 import { GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged, User } from 'firebase/auth';
 
 // --- File System Logic ---
@@ -620,6 +620,9 @@ const NotificationToasts: React.FC = () => {
 
 // --- Main App Component ---
 const App: React.FC = () => {
+    useEffect(() => {
+        initializeFirebase();
+    }, []);
     // --- State Initialization with Persistence ---
     const [fileSystem, fsDispatch] = useReducer(fileSystemReducer, initialFileSystem, (initial) => {
         try {
