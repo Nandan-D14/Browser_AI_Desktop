@@ -2,7 +2,7 @@ import React from 'react';
 // FIX: Removed unused and non-existent 'LiveSession' type from import.
 import { GoogleGenAI } from "@google/genai";
 
-export type AppId = 'ai_assistant' | 'file_explorer' | 'terminal' | 'settings' | 'text_editor' | 'calculator' | 'browser' | 'notes' | 'media_viewer' | 'properties_viewer';
+export type AppId = 'ai_assistant' | 'file_explorer' | 'terminal' | 'settings' | 'text_editor' | 'calculator' | 'browser' | 'notes' | 'media_viewer' | 'properties_viewer' | 'google_drive';
 
 export interface AppDefinition {
   id: AppId;
@@ -91,6 +91,10 @@ export interface AppContextType {
   sendNotification: (notification: Omit<Notification, 'id' | 'timestamp' | 'read'>) => void;
   markNotificationsAsRead: () => void;
   clearAllNotifications: () => void;
+  user: any; // You can create a more specific User type
+  login: () => void;
+  logout: () => void;
+  accessToken: string | null;
 }
 
 export type ConversationMode = 'QUICK' | 'THINKING' | 'VOICE';

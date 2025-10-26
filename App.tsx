@@ -5,6 +5,8 @@ import { AppContextType, AppDefinition, AppId, WindowInstance, FileSystemNode, F
 import { APP_DEFINITIONS, initialFileSystem, FolderIcon, FileTextIcon, ImageIcon, BellIcon, AppsIcon } from './constants';
 import WindowComponent from './components/Window';
 import { AppRenderer, ContextMenu } from './components/Applications';
+import { auth } from './services/firebase';
+import { GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged, User } from 'firebase/auth';
 
 // --- File System Logic ---
 const traverseAndModify = (node: FileSystemNode, action: FileSystemAction): FileSystemNode => {
@@ -112,7 +114,7 @@ const NotificationPanel: React.FC<{ onClose: () => void }> = ({ onClose }) => {
 
 
 const TopMenuBar: React.FC = () => {
-    const { windows, getAppDefinition, activeWindowId, notifications, markNotificationsAsRead } = useContext(AppContext)!;
+    const { windows, getAppDefinition, activeWindowId, notifications, markNotificationsAsRead, user, login, logout } = useContext(AppContext)!;
     const [time, setTime] = useState(new Date());
     const [isNotificationPanelOpen, setIsNotificationPanelOpen] = useState(false);
     
@@ -140,6 +142,14 @@ const TopMenuBar: React.FC = () => {
                 <div>{activeAppName}</div>
             </div>
             <div className="flex items-center gap-4">
+                {user ? (
+                    <>
+                        <div>Welcome, {user.displayName}</div>
+                        <button onClick={logout}>Logout</button>
+                    </>
+                ) : (
+                    <button onClick={login}>Login with Google</button>
+                )}
                  <div>{time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
                  <div className="relative">
                     <button onClick={handleNotificationToggle} className="relative" aria-haspopup="true" aria-expanded={isNotificationPanelOpen} aria-label={`Notifications, ${unreadCount} unread`}>
@@ -700,6 +710,35 @@ const App: React.FC = () => {
     const aiVoiceHandler = useRef<(() => void) | null>(null);
     const [isAiListening, setIsAiListening] = useState(false);
     const notificationAudioRef = useRef<HTMLAudioElement | null>(null);
+    const [user, setUser] = useState<User | null>(null);
+    const [accessToken, setAccessToken] = useState<string | null>(null);
+
+    const login = async () => {
+        try {
+            const provider = new GoogleAuthProvider();
+            provider.addScope('https://www.googleapis.com/auth/drive.readonly');
+            const result = await signInWithPopup(auth, provider);
+            const credential = GoogleAuthProvider.credentialFromResult(result);
+            setAccessToken(credential?.accessToken || null);
+        } catch (error) {
+            console.error("Error signing in: ", error);
+        }
+    };
+
+    const logout = async () => {
+        try {
+            await signOut(auth);
+        } catch (error) {
+            console.error("Error signing out: ", error);
+        }
+    };
+
+    useEffect(() => {
+        const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+            setUser(currentUser);
+        });
+        return () => unsubscribe();
+    }, []);
 
     // --- Persistence Effects ---
     useEffect(() => {
@@ -916,8 +955,9 @@ const App: React.FC = () => {
     const contextValue = useMemo(() => ({
         windows, openApp, closeApp, focusApp, minimizeApp, toggleMaximizeApp, updateWindow, wallpaper, setWallpaper, getAppDefinition, fileSystem, fsDispatch, activeWindowId, dockedApps, setDockedApps, aiPromptHandler, aiVoiceHandler, isAiListening, setIsAiListening, theme, setTheme,
         soundSettings, setSoundSettings,
-        notifications, sendNotification, markNotificationsAsRead, clearAllNotifications
-    }), [windows, openApp, closeApp, focusApp, minimizeApp, toggleMaximizeApp, updateWindow, wallpaper, setWallpaper, getAppDefinition, fileSystem, activeWindowId, dockedApps, setDockedApps, isAiListening, theme, soundSettings, notifications, sendNotification, markNotificationsAsRead, clearAllNotifications]);
+        notifications, sendNotification, markNotificationsAsRead, clearAllNotifications,
+        user, login, logout, accessToken
+    }), [windows, openApp, closeApp, focusApp, minimizeApp, toggleMaximizeApp, updateWindow, wallpaper, setWallpaper, getAppDefinition, fileSystem, activeWindowId, dockedApps, setDockedApps, isAiListening, theme, soundSettings, notifications, sendNotification, markNotificationsAsRead, clearAllNotifications, user, login, logout, accessToken]);
 
     return (
         <AppContext.Provider value={contextValue}>

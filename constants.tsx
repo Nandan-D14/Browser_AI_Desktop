@@ -3,6 +3,8 @@
 import React from 'react';
 import { AppDefinition, FileSystemNode } from './types';
 import { AIAssistant, FileExplorer, Terminal, Settings, TextEditor, Calculator, Browser, Notes, MediaViewer, PropertiesViewer } from './components/Applications';
+import GoogleDrive from './components/GoogleDrive';
+import { GoogleDriveIcon as GoogleDriveIconComponent } from './components/GoogleDriveIcon';
 
 // --- SVG Icons ---
 export const FolderIcon = ({ className }: { className?: string }) => (
@@ -109,6 +111,7 @@ export const APP_DEFINITIONS: AppDefinition[] = [
   { id: 'notes', name: 'Notes', icon: NoteIcon, component: Notes, defaultSize: [400, 500] },
   { id: 'media_viewer', name: 'Media Viewer', icon: ImageIcon, component: MediaViewer, defaultSize: [600, 500] },
   { id: 'properties_viewer', name: 'Properties', icon: InfoIcon, component: PropertiesViewer, defaultSize: [350, 400] },
+  { id: 'google_drive', name: 'Google Drive', icon: GoogleDriveIconComponent, component: GoogleDrive, defaultSize: [600, 500], isDefault: true },
 ];
 
 // --- Mock File System ---
