@@ -76,41 +76,39 @@ const WindowComponent: React.FC<WindowProps> = ({ instance, onClose, onMinimize,
       let newX = position.x;
       let newY = position.y;
 
+      if (isResizing.includes('right')) newWidth = resizeStartInfo.current.width + dx;
+      if (isResizing.includes('bottom')) newHeight = resizeStartInfo.current.height + dy;
+      if (isResizing.includes('left')) {
+        newWidth = resizeStartInfo.current.width - dx;
+        newX = position.x + dx;
+      }
+      if (isResizing.includes('top')) {
+        newHeight = resizeStartInfo.current.height - dy;
+        newY = position.y + dy;
+      }
+      
       const minWidth = 200;
       const minHeight = 150;
 
-      if (isResizing.includes('right')) {
-        newWidth = Math.max(minWidth, resizeStartInfo.current.width + dx);
-      }
-      if (isResizing.includes('bottom')) {
-        newHeight = Math.max(minHeight, resizeStartInfo.current.height + dy);
-      }
-      if (isResizing.includes('left')) {
-        const proposedWidth = resizeStartInfo.current.width - dx;
-        newX = position.x + dx;
-        newWidth = proposedWidth;
-        if (newWidth < minWidth) {
-          newX += newWidth - minWidth;
+      if (newWidth < minWidth) {
+          if(isResizing.includes('left')) newX = position.x + (newWidth - minWidth);
           newWidth = minWidth;
-        }
       }
-      if (isResizing.includes('top')) {
-        const bottomEdge = position.y + size.height;
-        const proposedY = position.y + dy;
-        newY = proposedY;
-
-        if (newY < TOP_MENU_BAR_HEIGHT) {
-          newY = TOP_MENU_BAR_HEIGHT;
-        }
-
-        newHeight = bottomEdge - newY;
-
-        if (newHeight < minHeight) {
-          newHeight = minHeight;
-          newY = bottomEdge - minHeight;
-        }
+      if (newHeight < minHeight) {
+          if(isResizing.includes('top')) {
+            const proposedY = position.y + dy;
+            newY = Math.max(TOP_MENU_BAR_HEIGHT, proposedY);
+            newHeight = size.height + (position.y - newY);
+          } else {
+             newHeight = minHeight;
+          }
       }
-      
+
+      if(newY < TOP_MENU_BAR_HEIGHT) {
+        newHeight = size.height + (newY - TOP_MENU_BAR_HEIGHT);
+        newY = TOP_MENU_BAR_HEIGHT;
+      }
+
       onUpdateWindow(id, { size: { width: newWidth, height: newHeight }, position: { x: newX, y: newY } });
     }
   }, [isDragging, isResizing, id, onUpdateWindow, position, size]);
